@@ -1,0 +1,5 @@
+update_ratio,hot_weight,GC_count_atcb,GC_count_cb,GC_count_greedy,WAF_atcb,WAF_cb,WAF_greedy,impr_WAF_cb_pct,impr_WAF_atcb_pct,impr_GC_count_cb_pct,impr_GC_count_atcb_pct
+0.5,0.6,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,,
+0.5,0.85,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,,
+0.8,0.6,0.0,0.0,0.0,1.0,1.0,1.0,0.0,0.0,,
+0.8,0.85,0.0,7909.666666666667,11582.0,1.0,6.00938,7.658460000000001,21.53278857629341,86.94254458468151,31.707246877338395,100.0

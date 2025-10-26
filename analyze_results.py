@@ -1,8 +1,5 @@
-import os
-import sys
-import csv
-import argparse
-import glob
+import os, sys, csv
+import argparse, glob, math, random
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -198,3 +195,65 @@ print("[OK] CSVs ->",
       os.path.join(BASE, "results_summary_policy.csv"), ",",
       os.path.join(BASE, "results_summary_by_workload.csv"), ",",
       os.path.join(BASE, "results_improvement_vs_greedy.csv"))
+
+def overlay_gc_markers(ax, gc_events_csv: str):
+    """gc_events.csv에 step(또는 time), gc_ms 컬럼이 있다고 가정하고 세로선으로 오버레이."""
+    if not gc_events_csv:
+        return
+    try:
+        xs = []
+        with open(gc_events_csv, "r", encoding="utf-8") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                step = row.get("step")
+                if step is not None:
+                    xs.append(int(step))
+        for x in xs:
+            ax.axvline(x=x, linestyle="--", alpha=0.2)
+    except Exception:
+        pass
+
+def bootstrap_ci(values, iters=2000, alpha=0.05, seed=123):
+    vals = [v for v in values if v is not None and not (isinstance(v,float) and math.isnan(v))]
+    if len(vals) == 0:
+        return (float("nan"), float("nan"), float("nan"))
+    rnd = random.Random(seed)
+    n = len(vals)
+    means = []
+    for _ in range(iters):
+        samp = [vals[rnd.randrange(n)] for _ in range(n)]
+        means.append(sum(samp)/n)
+    means.sort()
+    lo = means[int((alpha/2)*iters)]
+    hi = means[int((1-alpha/2)*iters)]
+    mu = sum(vals)/n
+    return (mu, lo, hi)
+
+def plot_waf_by_policy(df: pd.DataFrame, out_png: str):
+    """정책별 WAF 평균±95% CI 바차트"""
+    grp = df.groupby("policy")["WAF"].apply(list).to_dict()
+    labels, mus, los, his = [], [], [], []
+    for pol, arr in grp.items():
+        mu, lo, hi = bootstrap_ci(arr)
+        labels.append(pol); mus.append(mu); los.append(mu-lo); his.append(hi-mu)
+    plt.figure()
+    plt.title("WAF by Policy (mean ±95% CI)")
+    x = range(len(labels))
+    plt.bar(x, mus, yerr=[los, his], capsize=4)
+    plt.xticks(x, labels)
+    plt.ylabel("WAF")
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.close()
+
+def plot_p99_box(df: pd.DataFrame, out_png: str):
+    """정책별 p99 박스플롯"""
+    data = [df[df["policy"]==p]["lat_p99_ms"].dropna().values for p in sorted(df["policy"].unique())]
+    labels = sorted(df["policy"].unique())
+    plt.figure()
+    plt.title("Tail Latency (p99) by Policy")
+    plt.boxplot(data, labels=labels, showfliers=False)
+    plt.ylabel("p99 latency (ms)")
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.close()

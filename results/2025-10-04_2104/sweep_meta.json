@@ -1,0 +1,21 @@
+{
+  "ops": 10000,
+  "hot_ratio": 0.2,
+  "policies": [
+    "greedy",
+    "cb",
+    "atcb"
+  ],
+  "update_ratios": [
+    0.5,
+    0.8
+  ],
+  "hot_weights": [
+    0.6,
+    0.85
+  ],
+  "seeds": [
+    42,
+    123
+  ]
+}
