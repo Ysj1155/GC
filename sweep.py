@@ -1,131 +1,107 @@
-import itertools, subprocess, platform
-import sys, json
-import os, re
-from datetime import datetime
+from __future__ import annotations
+import argparse
+import os
+from typing import Any, Dict, List
 
-# ---------- Settings ----------
-PY = sys.executable
+# experiments 모듈의 빌딩 블록을 그대로 재사용
+from experiments import (
+    build_grid,
+    load_scenarios,
+    run_once,
+)
 
-# 실험 스펙 (스모크 통과 후 숫자 늘리기)
-OPS         = 200000
-HOT_RATIO   = 0.2
-USER_CAPS   = [0.90]          # 필요 시 0.88로 낮추면 더 안정(OP 12%)
-UPDATE_RATIOS = [0.8]
-HOT_WEIGHTS   = [0.7]
-SEEDS         = [101]
+# ------------------------------------------------------------
+# CLI
+# ------------------------------------------------------------
 
-# ATCB weight ablation (alpha, beta, gamma, eta)
-ATCB_WEIGHTS = [
-    (0.5, 0.3, 0.1, 0.1),
-]
+def main():
+    ap = argparse.ArgumentParser(description="Sweep runner (wrapper over experiments.py)")
 
-# 안전 마진(여기서 바꾸면 모든 런에 반영)
-WARMUP_FILL = 0.60
-GC_FBT      = 0.12            # gc_free_block_threshold (기본 0.05 → 0.12)
-BG_GC_EVERY = 256             # 주기적 백그라운드 GC
+    # 공통 파라미터(기본값은 run_sim/experiments와 일치)
+    ap.add_argument("--ops", type=int, default=200_000)
+    ap.add_argument("--update_ratio", type=float, default=0.8)
+    ap.add_argument("--hot_ratio", type=float, default=0.2)
+    ap.add_argument("--hot_weight", type=float, default=0.7)
+    ap.add_argument("--blocks", type=int, default=256)
+    ap.add_argument("--pages_per_block", type=int, default=64)
+    ap.add_argument("--gc_free_block_threshold", type=float, default=0.12)
+    ap.add_argument("--user_capacity_ratio", type=float, default=0.9)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--bg_gc_every", type=int, default=0)
 
-TAG = "atcb"                  # 결과 폴더 접미사
+    ap.add_argument("--enable_trim", action="store_true")
+    ap.add_argument("--trim_ratio", type=float, default=0.0)
+    ap.add_argument("--warmup_fill", type=float, default=0.0)
 
-# ---------- 결과 폴더 ----------
-TODAY   = datetime.now().strftime("%Y-%m-%d")
-DAY_DIR = os.path.join("results", TODAY)
-os.makedirs(DAY_DIR, exist_ok=True)
+    ap.add_argument("--gc_policy", type=str, default="greedy",
+                    choices=["greedy","cb","cost_benefit","bsgc","cat","atcb","re50315"])
 
-def next_run_dir(base: str, tag: str = "") -> str:
-    runs = []
-    for d in os.listdir(base):
-        p = os.path.join(base, d)
-        if os.path.isdir(p) and re.match(r"^run\d{2}", d):
-            try:
-                runs.append(int(d.split("_", 1)[0][3:]))  # runNN[_tag]
-            except ValueError:
-                pass
-    idx = (max(runs) if runs else 0) + 1
-    name = f"run{idx:02d}" + (f"_{tag}" if tag else "")
-    out = os.path.join(base, name)
-    os.makedirs(out, exist_ok=True)
-    return out
+    # CAT 확장 파라미터 (gc_algos에 주입 — experiments.run_once 내부에서 처리)
+    ap.add_argument("--cat_alpha", type=float, default=None)
+    ap.add_argument("--cat_beta", type=float, default=None)
+    ap.add_argument("--cat_gamma", type=float, default=None)
+    ap.add_argument("--cat_delta", type=float, default=None)
+    ap.add_argument("--cold_victim_bias", type=float, default=1.0)
+    ap.add_argument("--trim_age_bonus", type=float, default=0.0)
+    ap.add_argument("--victim_prefetch_k", type=int, default=1)
 
-OUT_DIR = next_run_dir(DAY_DIR, TAG)
+    # ATCB / RE50315
+    ap.add_argument("--atcb_alpha", type=float, default=0.5)
+    ap.add_argument("--atcb_beta", type=float, default=0.3)
+    ap.add_argument("--atcb_gamma", type=float, default=0.1)
+    ap.add_argument("--atcb_eta", type=float, default=0.1)
+    ap.add_argument("--re50315_K", type=float, default=1.0)
 
-# ---------- 공통 유틸 ----------
-def run(cmd):
-    print("[RUN]", " ".join(str(x) for x in cmd))
-    subprocess.run([str(x) for x in cmd], check=True)
+    # Sweep 옵션
+    ap.add_argument("--grid", type=str, default=None, help="키=값1,값2; 키2=... 형식")
+    ap.add_argument("--repeat", type=int, default=1, help="시드 반복 횟수(시작 시드부터 +1 증가)")
+    ap.add_argument("--scenarios", type=str, default=None, help="YAML 파일 경로(여러 실험 사양)")
 
-# 공통 인자(여기 꼭 임계치/배경GC/워밍업 포함!)
-BASE_ARGS = [
-    "--ops", str(OPS),
-    "--hot_ratio", str(HOT_RATIO),
-    "--warmup_fill", str(WARMUP_FILL),
-    "--gc_free_block_threshold", str(GC_FBT),
-    "--bg_gc_every", str(BG_GC_EVERY),
-    "--out_dir", OUT_DIR,
-    "--out_csv", "results.csv",          # OUT_DIR 하위에 저장
-]
+    # 출력
+    ap.add_argument("--out_dir", type=str, default="results/sweep")
+    ap.add_argument("--out_csv", type=str, default="results/sweep/summary.csv")
+    ap.add_argument("--note", type=str, default="")
 
-# ---------- 메타 스냅샷 ----------
-def git_commit_short():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except Exception:
-        return None
+    args = ap.parse_args()
 
-meta = {
-    "ops": OPS,
-    "hot_ratio": HOT_RATIO,
-    "user_caps": USER_CAPS,
-    "update_ratios": UPDATE_RATIOS,
-    "hot_weights": HOT_WEIGHTS,
-    "seeds": SEEDS,
-    "atcb_weights": ATCB_WEIGHTS,
-    "warmup_fill": WARMUP_FILL,
-    "gc_free_block_threshold": GC_FBT,
-    "bg_gc_every": BG_GC_EVERY,
-    "git_commit": git_commit_short(),
-    "python": sys.version.split()[0],
-    "platform": platform.platform(),
-    "out_dir": OUT_DIR,
-}
-with open(os.path.join(OUT_DIR, "sweep_meta.json"), "w", encoding="utf-8") as f:
-    json.dump(meta, f, ensure_ascii=False, indent=2)
-with open(os.path.join("results", "LATEST.txt"), "w", encoding="utf-8") as f:
-    f.write(OUT_DIR)
+    os.makedirs(args.out_dir, exist_ok=True)
 
-# ---------- Sweep ----------
-for u, hw, seed, ucap in itertools.product(UPDATE_RATIOS, HOT_WEIGHTS, SEEDS, USER_CAPS):
-    # Greedy / CB
-    for pol in ["greedy", "cb"]:
-        note = f"{pol}_u{u}_hw{hw}_uc{ucap}_s{seed}"
-        cmd = [
-            PY, "run_sim.py",
-            "--gc_policy", pol,
-            "--update_ratio", str(u),
-            "--hot_weight", str(hw),
-            "--user_capacity_ratio", str(ucap),
-            "--seed", str(seed),
-            "--note", note,
-            *BASE_ARGS,
+    runs: List[Dict[str, Any]] = []
+
+    if args.scenarios:
+        scs = load_scenarios(args.scenarios)
+        for sc in scs:
+            d = vars(args).copy()
+            d.update(sc)
+            d["note"] = sc.get("note", args.note)
+            rep = int(d.get("repeat", args.repeat))
+            base_seed = int(d.get("seed", args.seed))
+            for r in range(rep):
+                d2 = d.copy()
+                d2["seed"] = base_seed + r
+                row = run_once(argparse.Namespace(**d2), args.out_dir, args.out_csv)
+                runs.append(row)
+    else:
+        grid = build_grid(args)
+        for conf in grid:
+            rep = int(conf.get("repeat", args.repeat))
+            base_seed = int(conf.get("seed", args.seed))
+            for r in range(rep):
+                conf2 = conf.copy()
+                conf2["seed"] = base_seed + r
+                row = run_once(argparse.Namespace(**conf2), args.out_dir, args.out_csv)
+                runs.append(row)
+
+    # 콘솔 요약
+    if runs:
+        cols = [
+            "policy","ops","seed","waf","gc_count","free_blocks",
+            "wear_avg","wear_std","trimmed_pages","transition_rate","reheat_rate"
         ]
-        run(cmd)
+        print("\t".join(cols))
+        for r in runs:
+            print("\t".join(str(r.get(c, "")) for c in cols))
 
-    # ATCB
-    for (a, b, g, e) in ATCB_WEIGHTS:
-        note = f"atcb_u{u}_hw{hw}_uc{ucap}_s{seed}_a{a}_b{b}_g{g}_e{e}"
-        cmd = [
-            PY, "run_sim.py",
-            "--gc_policy", "atcb",
-            "--update_ratio", str(u),
-            "--hot_weight", str(hw),
-            "--user_capacity_ratio", str(ucap),
-            "--seed", str(seed),
-            "--atcb_alpha", str(a),
-            "--atcb_beta",  str(b),
-            "--atcb_gamma", str(g),
-            "--atcb_eta",   str(e),
-            "--note", note,
-            *BASE_ARGS,
-        ]
-        run(cmd)
 
-print(f"[OK] Sweep complete. Analyze with:\n  python analyze_results.py --base {OUT_DIR}")
+if __name__ == "__main__":
+    main()

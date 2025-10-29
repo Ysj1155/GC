@@ -1,259 +1,226 @@
-import os, sys, csv
-import argparse, glob, math, random
-import pandas as pd
-import matplotlib.pyplot as plt
+from __future__ import annotations
+import os
+import sys
+import argparse
+import glob
+from typing import List, Dict, Any
 
-# ---------------- Args ----------------
-ap = argparse.ArgumentParser(description="Analyze SSD GC results.")
-ap.add_argument("--base", default="results",
-                help=r"Base dir (e.g., results\2025-10-04\run01_atcb or results\2025-10-04)")
-ap.add_argument("--csv", default="results.csv",
-                help="CSV file name to read inside base or its subdirs (default: results.csv)")
-ap.add_argument("--merge-subdirs", action="store_true",
-                help="Merge all subdirs under --base that contain the CSV, then analyze.")
-ap.add_argument("--use-latest", action="store_true",
-                help="Use path stored in results/LATEST.txt (overrides --base).")
-args = ap.parse_args()
+# pandas/matplotlib 의존 — 없으면 에러 메시지 명확히
+try:
+    import pandas as pd
+except Exception as e:
+    print("[analyze_results] pandas가 필요합니다: pip install pandas", file=sys.stderr)
+    raise
 
-def resolve_base():
-    if args.use_latest:
-        latest = os.path.join("results", "LATEST.txt")
-        if os.path.exists(latest):
-            with open(latest, "r", encoding="utf-8") as f:
-                b = f.read().strip()
-            if b:
-                return b
-            print("[WARN] LATEST.txt is empty, falling back to --base.")
-        else:
-            print("[WARN] results/LATEST.txt not found, falling back to --base.")
-    return args.base
+try:
+    import matplotlib.pyplot as plt
+except Exception as e:
+    print("[analyze_results] matplotlib이 필요합니다: pip install matplotlib", file=sys.stderr)
+    raise
 
-BASE = resolve_base()
-CSV_NAME = args.csv
 
-# ---------------- Reader (flex schema) ----------------
-SCHEMA17 = [
-    "policy","ops","update_ratio","hot_ratio","hot_weight","seed",
-    "host_writes","device_writes","WAF","GC_count",
-    "avg_erase","min_erase","max_erase","wear_delta",
-    "free_pages","total_pages","note",
-]
-SCHEMA22 = [
-    "policy","ops","update_ratio","hot_ratio","hot_weight","seed",
-    "host_writes","device_writes","WAF","GC_count",
-    "avg_erase","min_erase","max_erase","wear_delta",
-    "free_pages","total_pages",
-    "gc_time_total_ms","gc_time_avg_ms","gc_time_p50_ms","gc_time_p95_ms","gc_time_p99_ms",
-    "note",
-]
+# ------------------------------------------------------------
+# 파일 수집/로딩
+# ------------------------------------------------------------
 
-def read_results_flex(path: str) -> pd.DataFrame:
-    rows = []
-    with open(path, newline="", encoding="utf-8") as f:
-        rdr = csv.reader(f)
-        for r in rdr:
-            if not r: continue
-            if r[0] == "policy": continue
-            L = len(r)
-            if L == len(SCHEMA22):
-                keys = SCHEMA22
-            elif L == len(SCHEMA17):
-                keys = SCHEMA17
-            elif L > len(SCHEMA22):
-                merged = r[:len(SCHEMA22)-1] + [",".join(r[len(SCHEMA22)-1:])]
-                r = merged; keys = SCHEMA22
-            else:
-                r = r + [""] * (len(SCHEMA22) - L)
-                keys = SCHEMA22
-            rows.append(dict(zip(keys, r)))
-    df = pd.DataFrame(rows)
-    numeric_cols = [
-        "ops","update_ratio","hot_ratio","hot_weight","seed",
-        "host_writes","device_writes","WAF","GC_count",
-        "avg_erase","min_erase","max_erase","wear_delta",
-        "free_pages","total_pages",
-        "gc_time_total_ms","gc_time_avg_ms","gc_time_p50_ms","gc_time_p95_ms","gc_time_p99_ms",
-        "wear_std","wear_cv","wear_gini",  # optional (newer CSVs)
-    ]
-    for c in numeric_cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+def _find_summary_csvs(base_dir: str, merge_subdirs: bool, filename: str = "summary.csv") -> List[str]:
+    base_dir = os.path.abspath(base_dir)
+    if not os.path.isdir(base_dir):
+        raise FileNotFoundError(f"base 디렉토리가 존재하지 않습니다: {base_dir}")
+    paths: List[str] = []
+    if merge_subdirs:
+        for p in glob.glob(os.path.join(base_dir, "**", filename), recursive=True):
+            paths.append(p)
+    else:
+        p = os.path.join(base_dir, filename)
+        if os.path.exists(p):
+            paths.append(p)
+    return sorted(paths)
 
-# ---------------- Load (single or merge) ----------------
-def load_single(base: str, csv_name: str) -> pd.DataFrame:
-    csv_path = os.path.join(base, csv_name)
-    if not os.path.exists(csv_path):
-        print(f"[ERROR] Results CSV not found: {csv_path}")
-        sys.exit(1)
-    df = read_results_flex(csv_path)
-    df["__source__"] = base
-    return df
 
-def load_merge_subdirs(base: str, csv_name: str) -> pd.DataFrame:
-    # candidates: base/*/csv_name (1 depth)
-    pats = glob.glob(os.path.join(base, "*", csv_name))
-    if not pats:
-        print(f"[ERROR] No subdir CSVs found under: {base} (looked for */{csv_name})")
-        sys.exit(1)
-    dfs = []
-    for p in sorted(pats):
+def _read_csvs(paths: List[str]) -> pd.DataFrame:
+    frames = []
+    for p in paths:
         try:
-            df = read_results_flex(p)
-            df["__source__"] = os.path.dirname(p)
-            dfs.append(df)
+            df = pd.read_csv(p)
+            df["__source__"] = p
+            frames.append(df)
         except Exception as e:
-            print(f"[WARN] Failed to read {p}: {e}")
-    if not dfs:
-        print("[ERROR] No readable CSVs found.")
-        sys.exit(1)
-    return pd.concat(dfs, ignore_index=True)
+            print(f"[WARN] CSV 읽기 실패: {p}: {e}")
+    if not frames:
+        raise RuntimeError("읽을 수 있는 summary CSV가 없습니다.")
+    # 컬럼 차이를 보존하면서 병합(outer)
+    all_cols = sorted(set().union(*[set(f.columns) for f in frames]))
+    frames = [f.reindex(columns=all_cols) for f in frames]
+    return pd.concat(frames, ignore_index=True)
 
-if args.merge_subdirs:
-    df = load_merge_subdirs(BASE, CSV_NAME)
-    OUT = os.path.join(BASE, "plots_merged")
-    CLEAN_OUT = os.path.join(BASE, "results_merged_clean.csv")
-else:
-    df = load_single(BASE, CSV_NAME)
-    OUT = os.path.join(BASE, "plots")
-    CLEAN_OUT = os.path.join(BASE, "results_clean.csv")
 
-os.makedirs(OUT, exist_ok=True)
-df.to_csv(CLEAN_OUT, index=False)
+# ------------------------------------------------------------
+# 시각화 유틸
+# ------------------------------------------------------------
 
-if df.empty:
-    print("[WARN] No rows in results; nothing to plot/summarize.")
-    sys.exit(0)
+def _ensure_out_dir(path: str):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-# ---------------- Plot helpers ----------------
-def run_name(row):
-    note = str(row.get("note") or "").strip()
-    src  = os.path.basename(str(row.get("__source__", "")))
-    base = f'{row["policy"]} ({note})' if note else str(row["policy"])
-    # 소스 폴더(run01 등)도 보이게 하면 병합 때 구분이 쉬움
-    return f"{base} | {src}" if src else base
 
-df["run"] = df.apply(run_name, axis=1)
-
-def save_bar(ycol: str, title: str, fname: str):
-    if ycol in df.columns and df[ycol].notna().any():
-        ax = df.plot(kind="bar", x="run", y=ycol, legend=False, figsize=(12,5), title=title)
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        plt.savefig(os.path.join(OUT, fname), bbox_inches="tight")
-        plt.close()
-
-save_bar("WAF", "WAF by run", "waf_by_run.png")
-save_bar("GC_count", "GC count by run", "gc_by_run.png")
-save_bar("gc_time_p99_ms", "GC time p99 (ms) by run", "gc_p99_by_run.png")
-
-# ---------------- Summaries (columns-if-exist) ----------------
-def cols_exist(cols): return [c for c in cols if c in df.columns]
-
-summary_cols = cols_exist(["WAF","GC_count","gc_time_p99_ms","wear_delta","wear_std","wear_cv","wear_gini"])
-g1 = df[["policy"] + summary_cols].groupby("policy", dropna=False).mean(numeric_only=True).reset_index()
-if "WAF" in g1.columns:
-    g1 = g1.sort_values("WAF")
-g1.to_csv(os.path.join(BASE, "results_summary_policy.csv"), index=False)
-
-have_cols = cols_exist(["WAF","GC_count","gc_time_p99_ms","wear_delta","wear_std","wear_cv","wear_gini"])
-keys = cols_exist(["update_ratio","hot_weight"]) + ["policy"]
-g2 = df[keys + have_cols].groupby(keys, dropna=False).mean(numeric_only=True).reset_index()
-g2.to_csv(os.path.join(BASE, "results_summary_by_workload.csv"), index=False)
-
-def improvement_vs_greedy(dfin: pd.DataFrame) -> pd.DataFrame:
-    base_keys = cols_exist(["update_ratio","hot_weight"])
-    if not base_keys: return pd.DataFrame()
-    if "greedy" not in dfin["policy"].unique(): return pd.DataFrame()
-    sub = dfin[base_keys + ["policy","WAF","GC_count"]].copy()
-    piv = sub.pivot_table(index=base_keys, columns="policy", values=["WAF","GC_count"], aggfunc="mean")
-    piv.columns = [f"{a}_{b}" for a, b in piv.columns]
-    for met in ["WAF","GC_count"]:
-        gcol = f"{met}_greedy"
-        for pol in ["cb","bsgc","atcb"]:
-            pcol = f"{met}_{pol}"
-            if gcol in piv.columns and pcol in piv.columns:
-                piv[f"impr_{met}_{pol}_pct"] = (piv[gcol] - piv[pcol]) / piv[gcol] * 100.0
-    return piv.reset_index()
-
-g3 = improvement_vs_greedy(df)
-g3.to_csv(os.path.join(BASE, "results_improvement_vs_greedy.csv"), index=False)
-
-# ---------------- Console prints ----------------
-print("\n[SUMMARY] Policy means (sorted by WAF if available):")
-print(g1.to_string(index=False))
-
-if not g3.empty:
-    show_cols = [c for c in g3.columns if c.startswith("impr_")]
-    if show_cols:
-        print("\n[IMPROVEMENTS] Greedy vs others (%):")
-        print(g3[cols_exist(['update_ratio','hot_weight']) + show_cols].to_string(index=False))
-
-print(f"\n[OK] Saved plots -> {OUT}")
-print("[OK] CSVs ->",
-      CLEAN_OUT, ",",
-      os.path.join(BASE, "results_summary_policy.csv"), ",",
-      os.path.join(BASE, "results_summary_by_workload.csv"), ",",
-      os.path.join(BASE, "results_improvement_vs_greedy.csv"))
-
-def overlay_gc_markers(ax, gc_events_csv: str):
-    """gc_events.csv에 step(또는 time), gc_ms 컬럼이 있다고 가정하고 세로선으로 오버레이."""
-    if not gc_events_csv:
-        return
+def _safe_float(s: Any, default: float = 0.0) -> float:
     try:
-        xs = []
-        with open(gc_events_csv, "r", encoding="utf-8") as f:
-            r = csv.DictReader(f)
-            for row in r:
-                step = row.get("step")
-                if step is not None:
-                    xs.append(int(step))
-        for x in xs:
-            ax.axvline(x=x, linestyle="--", alpha=0.2)
+        return float(s)
     except Exception:
-        pass
+        return default
 
-def bootstrap_ci(values, iters=2000, alpha=0.05, seed=123):
-    vals = [v for v in values if v is not None and not (isinstance(v,float) and math.isnan(v))]
-    if len(vals) == 0:
-        return (float("nan"), float("nan"), float("nan"))
-    rnd = random.Random(seed)
-    n = len(vals)
-    means = []
-    for _ in range(iters):
-        samp = [vals[rnd.randrange(n)] for _ in range(n)]
-        means.append(sum(samp)/n)
-    means.sort()
-    lo = means[int((alpha/2)*iters)]
-    hi = means[int((1-alpha/2)*iters)]
-    mu = sum(vals)/n
-    return (mu, lo, hi)
 
-def plot_waf_by_policy(df: pd.DataFrame, out_png: str):
-    """정책별 WAF 평균±95% CI 바차트"""
-    grp = df.groupby("policy")["WAF"].apply(list).to_dict()
-    labels, mus, los, his = [], [], [], []
-    for pol, arr in grp.items():
-        mu, lo, hi = bootstrap_ci(arr)
-        labels.append(pol); mus.append(mu); los.append(mu-lo); his.append(hi-mu)
+def plot_waf_by_policy(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    col_policy = "policy"
+    col_waf = "waf"
+    if col_policy not in df.columns or col_waf not in df.columns:
+        print("[plot] 필요한 컬럼이 없습니다(policy, waf)")
+        return
+    # 박스플롯: 정책별 WAF 분포
+    order = sorted(df[col_policy].dropna().unique())
+    data = [df[df[col_policy]==p][col_waf].astype(float) for p in order]
     plt.figure()
-    plt.title("WAF by Policy (mean ±95% CI)")
-    x = range(len(labels))
-    plt.bar(x, mus, yerr=[los, his], capsize=4)
-    plt.xticks(x, labels)
+    plt.boxplot(data, labels=order, showmeans=True)
+    plt.title("WAF by Policy")
     plt.ylabel("WAF")
+    plt.grid(True, linestyle=":", alpha=0.5)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.savefig(out_path)
     plt.close()
 
-def plot_p99_box(df: pd.DataFrame, out_png: str):
-    """정책별 p99 박스플롯"""
-    data = [df[df["policy"]==p]["lat_p99_ms"].dropna().values for p in sorted(df["policy"].unique())]
-    labels = sorted(df["policy"].unique())
+
+def plot_gc_vs_ops(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    if not {"gc_count","ops"}.issubset(df.columns):
+        print("[plot] 필요한 컬럼이 없습니다(gc_count, ops)")
+        return
     plt.figure()
-    plt.title("Tail Latency (p99) by Policy")
-    plt.boxplot(data, labels=labels, showfliers=False)
-    plt.ylabel("p99 latency (ms)")
+    plt.scatter(df["ops"].astype(float), df["gc_count"].astype(float), s=12, alpha=0.6)
+    plt.xlabel("ops")
+    plt.ylabel("gc_count")
+    plt.title("GC Count vs Ops")
+    plt.grid(True, linestyle=":", alpha=0.5)
     plt.tight_layout()
-    plt.savefig(out_png, dpi=200, bbox_inches="tight")
+    plt.savefig(out_path)
     plt.close()
+
+
+def plot_waf_vs_update_ratio(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    if not {"waf","update_ratio"}.issubset(df.columns):
+        print("[plot] 필요한 컬럼이 없습니다(waf, update_ratio)")
+        return
+    plt.figure()
+    plt.scatter(df["update_ratio"].astype(float), df["waf"].astype(float), s=12, alpha=0.6)
+    plt.xlabel("update_ratio")
+    plt.ylabel("WAF")
+    plt.title("WAF vs Update Ratio")
+    plt.grid(True, linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
+def plot_wear_hist(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    cols = [c for c in df.columns if c.startswith("wear_")]
+    need = {"wear_min","wear_avg","wear_max"}
+    if not need.issubset(set(cols)):
+        print("[plot] 필요한 컬럼이 없습니다(wear_min/wear_avg/wear_max)")
+        return
+    # 평균 wear의 히스토그램
+    plt.figure()
+    plt.hist(df["wear_avg"].astype(float), bins=30, alpha=0.8)
+    plt.xlabel("wear_avg")
+    plt.ylabel("count")
+    plt.title("Wear Average Distribution")
+    plt.grid(True, linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
+def plot_trim_vs_policy(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    if not {"policy","trimmed_pages"}.issubset(df.columns):
+        print("[plot] 필요한 컬럼이 없습니다(policy, trimmed_pages)")
+        return
+    # 정책별 평균 트림 페이지 수
+    g = df.groupby("policy")["trimmed_pages"].mean().sort_values()
+    plt.figure()
+    g.plot(kind="bar")
+    plt.ylabel("avg trimmed pages")
+    plt.title("Trimmed Pages by Policy (avg)")
+    plt.grid(True, axis="y", linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
+def plot_stability(df: pd.DataFrame, out_path: str):
+    _ensure_out_dir(out_path)
+    if not {"transition_rate","reheat_rate"}.issubset(df.columns):
+        print("[plot] 필요한 컬럼이 없습니다(transition_rate, reheat_rate)")
+        return
+    plt.figure()
+    plt.scatter(df["transition_rate"].astype(float), df["reheat_rate"].astype(float), s=12, alpha=0.6)
+    plt.xlabel("transition_rate")
+    plt.ylabel("reheat_rate")
+    plt.title("Stability Snapshot")
+    plt.grid(True, linestyle=":", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+
+
+# ------------------------------------------------------------
+# 메인
+# ------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Analyze GC results (merge/plots)")
+    ap.add_argument("--base", type=str, required=True, help="기준 디렉토리")
+    ap.add_argument("--merge-subdirs", action="store_true", help="하위 폴더의 summary.csv까지 병합")
+    ap.add_argument("--filename", type=str, default="summary.csv", help="요약 파일명(기본 summary.csv)")
+    ap.add_argument("--out_csv", type=str, default=None, help="병합 결과 CSV 저장 경로")
+    ap.add_argument("--plots_dir", type=str, default=None, help="플롯 저장 디렉토리 (지정 시 기본 플롯 생성)")
+    args = ap.parse_args()
+
+    csvs = _find_summary_csvs(args.base, args.merge_subdirs, filename=args.filename)
+    if not csvs:
+        print("[analyze_results] 합칠 CSV가 없습니다.")
+        return
+
+    df = _read_csvs(csvs)
+
+    # 병합 CSV 저장
+    if args.out_csv:
+        os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
+        df.to_csv(args.out_csv, index=False)
+        print(f"[analyze_results] merged CSV saved: {args.out_csv}  (rows={len(df)})")
+
+    # 플롯
+    if args.plots_dir:
+        os.makedirs(args.plots_dir, exist_ok=True)
+        plot_waf_by_policy(df, os.path.join(args.plots_dir, "waf_by_policy.png"))
+        plot_gc_vs_ops(df, os.path.join(args.plots_dir, "gc_vs_ops.png"))
+        plot_waf_vs_update_ratio(df, os.path.join(args.plots_dir, "waf_vs_update_ratio.png"))
+        plot_wear_hist(df, os.path.join(args.plots_dir, "wear_avg_hist.png"))
+        plot_trim_vs_policy(df, os.path.join(args.plots_dir, "trim_by_policy.png"))
+        plot_stability(df, os.path.join(args.plots_dir, "stability_scatter.png"))
+        print(f"[analyze_results] plots saved to: {args.plots_dir}")
+
+    # 콘솔에 머리 몇 줄만 미리보기
+    preview_cols = [c for c in [
+        "policy","ops","seed","waf","gc_count","free_blocks",
+        "wear_avg","wear_std","trimmed_pages","transition_rate","reheat_rate","__source__"
+    ] if c in df.columns]
+    try:
+        print(df[preview_cols].head(20).to_string(index=False))
+    except Exception:
+        print(df.head(20).to_string(index=False))
+
+
+if __name__ == "__main__":
+    main()

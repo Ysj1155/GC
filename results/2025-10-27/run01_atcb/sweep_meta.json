@@ -1,0 +1,31 @@
+{
+  "ops": 200000,
+  "hot_ratio": 0.2,
+  "user_caps": [
+    0.9
+  ],
+  "update_ratios": [
+    0.8
+  ],
+  "hot_weights": [
+    0.7
+  ],
+  "seeds": [
+    101
+  ],
+  "atcb_weights": [
+    [
+      0.5,
+      0.3,
+      0.1,
+      0.1
+    ]
+  ],
+  "warmup_fill": 0.6,
+  "gc_free_block_threshold": 0.12,
+  "bg_gc_every": 256,
+  "git_commit": "f0d1564",
+  "python": "3.12.1",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "out_dir": "results\\2025-10-27\\run01_atcb"
+}
