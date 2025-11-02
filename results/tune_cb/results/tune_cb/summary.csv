@@ -1,0 +1,3 @@
+bg_gc_every,device_writes,free_blocks,free_pages,gc_avg_s,gc_count,host_writes,hot_ratio,hot_weight,invalid_pages,note,ops,pages_per_block,policy,reheat_rate,run_id,seed,total_pages,transition_rate,trim_enabled,trim_ratio,trimmed_pages,ts,update_ratio,valid_pages,waf,warmup_fill,wear_avg,wear_max,wear_min,wear_std
+256,514609,8,527,0.00023,7662,200000,0.2,0.7,2750,tune cb,200000,64,cb,0.002344,tune cb,42,16384,0.029688,0,0.0,0,2025-10-30T23:26:45,0.8,13107,2.573045,0.0,30.441406,34.0,27.0,1.184406
+256,514609,8,527,0.000213,7662,200000,0.2,0.7,2750,tune cb,200000,64,cb,0.002344,tune cb,42,16384,0.029688,0,0.0,0,2025-10-30T23:28:29,0.8,13107,2.573045,0.0,30.441406,34.0,27.0,1.184406

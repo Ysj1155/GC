@@ -1,220 +1,257 @@
+# simulator.py
 """
-Simulator — pool-aware allocation, BG-GC cadence, policy adapter (drop-in)
+Simulator — drop-in shim (backward-compatible)
 
-외부 인터페이스는 그대로 `Simulator` 클래스를 유지하면서,
-- hot/cold/gen 풀 분리(옵션)
-- BG-GC 주기(pool별 cadence)
-- 정책 어댑터: gc_algos의 함수형 정책을 바로 연결, top‑K 있으면 활용
-- last_prog_step / last_invalid_step 업데이트 훅
-
-필요 최소 구현만 포함(실제 LPN→PPN 매핑/FTL은 프로젝트 기존 코드와 통합하세요).
+- 하위호환:
+  * __init__(..., enable_trace=..., bg_gc_every=...) 안전 흡수
+  * sim.ssd 별칭 제공 (호출부가 sim.ssd를 기대)
+  * sim.gc_policy (외부에서 주입 시 우선 사용)
+  * sim.trace["gc_event"] 이벤트 로그 제공
+- 기능:
+  * cfg(SimConfig) 또는 SSD 인스턴스를 받아 초기화
+  * 워크로드 실행(run): write/trim 지원
+  * BG-GC: 간단한 cadence(주기) + free 비율 임계 연동
 """
+
 from __future__ import annotations
-from typing import Optional, List, Tuple, Callable
 from dataclasses import dataclass
+from typing import Callable, Optional, List, Any, Tuple, Dict
 import time
 
+# -------------------------
+# 안전한 의존성 로딩
+# -------------------------
 try:
-    from models import Device, Block, PageState
-except Exception:  # pragma: no cover
-    # 가벼운 타입 폴백(런타임에는 실제 models 사용)
+    # 프로젝트 모델: SSD 이름으로 정의되어 있음
+    from models import SSD as Device, Block, PageState
+except Exception:
+    # 타입 안전을 위해 최소 더미 제공
     Device = object  # type: ignore
     Block = object   # type: ignore
     class PageState:  # type: ignore
-        FREE=0; VALID=1; INVALID=2
+        FREE = 0; VALID = 1; INVALID = 2
 
-# 정책 로딩(함수형)
 try:
+    # 정책 팩토리(함수형 정책: policy(blocks) -> victim_idx)
     from gc_algos import get_gc_policy
-    # 선택적으로 cat의 top‑k 도우미가 있으면 사용
-    try:
-        from gc_algos import cat_policy_topk  # type: ignore
-    except Exception:
-        cat_policy_topk = None  # type: ignore
 except Exception:
-    def get_gc_policy(name: str):  # type: ignore
-        raise RuntimeError("gc_algos.get_gc_policy() 가 필요합니다")
-    cat_policy_topk = None
+    def get_gc_policy(name: str) -> Callable[[List[Any]], Optional[int]]:
+        # 최후방어: invalid_count가 최대인 블록
+        def greedy(blocks: List[Any]) -> Optional[int]:
+            if not blocks:
+                return None
+            best, best_inv = None, -1
+            for i, b in enumerate(blocks):
+                inv = int(getattr(b, "invalid_count", 0))
+                if inv > best_inv:
+                    best, best_inv = i, inv
+            return best
+        return greedy
 
-
+# -------------------------
+# BG-GC cadence
+# -------------------------
 @dataclass
 class BGSchedule:
-    every_hot: int = 256
-    every_cold: int = 1024
+    """pool별 GC 호출 주기(ops 기준). 0이면 주기 기반 off."""
+    every_hot: int = 0
+    every_cold: int = 0
+    every_gen: int = 0
 
+# -------------------------
+# 유틸
+# -------------------------
+def _now_step() -> int:
+    # 초 단위 step으로 충분 (상대 비교/로그용)
+    return int(time.time())
 
+def _free_block_count(blocks: List[Any]) -> int:
+    cnt = 0
+    for b in blocks:
+        used = int(getattr(b, "valid_count", 0)) + int(getattr(b, "invalid_count", 0))
+        if used == 0:
+            cnt += 1
+    return cnt
+
+def _total_blocks(blocks: List[Any]) -> int:
+    return len(blocks)
+
+def _pages_per_block(ssd: Any) -> int:
+    if hasattr(ssd, "pages_per_block"):
+        return int(getattr(ssd, "pages_per_block"))
+    # block 객체에 pages가 있다면 길이로 추정
+    blocks = getattr(ssd, "blocks", []) or []
+    if blocks and hasattr(blocks[0], "pages"):
+        return len(getattr(blocks[0], "pages"))
+    return 0
+
+# -------------------------
+# Simulator
+# -------------------------
 class Simulator:
-    def __init__(self,
-                 device: Device,
-                 policy_name: str = "cat",
-                 cold_pool: bool = True,
-                 bg: Optional[BGSchedule] = None):
-        self.dev: Device = device
+    def __init__(
+        self,
+        cfg_or_device: Any,
+        policy_name: str = "greedy",
+        cold_pool: bool = True,
+        bg: Optional[BGSchedule] = None,
+        **kwargs
+    ):
+        """
+        하위호환 키워드:
+          - enable_trace: bool (기본 False)
+          - bg_gc_every: int  (기본 0, gen pool에 대한 주기)
+        """
+        # ---- traces & opts
+        self.trace: Dict[str, List[Any]] = {"gc_event": []}
+        self.enable_trace: bool = bool(kwargs.pop("enable_trace", False))
+
+        # BG cadence (기본값 + 인자 반영)
+        bg_every = int(kwargs.pop("bg_gc_every", 0) or 0)
+        self.bg = bg or BGSchedule(
+            every_hot=0,
+            every_cold=max(bg_every * 4, 0) if bg_every else 0,  # 기본적으로 cold는 더 드물게
+            every_gen=bg_every,
+        )
+
+        # 정책
+        self._policy_name = (policy_name or "greedy").lower()
+        self._policy = get_gc_policy(self._policy_name)
+        self.gc_policy: Optional[Callable[[List[Any]], Optional[int]]] = None  # 외부 주입 우선
+
+        # ---- cfg/device 수용
+        self.cfg = None
+        self.ssd: Any = None
+
+        # SimConfig 비슷한 객체가 들어왔는지 검사
+        if hasattr(cfg_or_device, "num_blocks") and hasattr(cfg_or_device, "pages_per_block"):
+            self.cfg = cfg_or_device
+            # 사전 준비 훅(있으면)
+            try:
+                if hasattr(self.cfg, "prepare"):
+                    self.cfg.prepare()
+            except Exception:
+                pass
+            nb = int(getattr(self.cfg, "num_blocks"))
+            ppb = int(getattr(self.cfg, "pages_per_block"))
+            seed = int(getattr(self.cfg, "rng_seed", 42))
+            self.ssd = Device(nb, ppb, rng_seed=seed)
+        else:
+            # 이미 SSD 인스턴스
+            self.ssd = cfg_or_device
+
+        # 별칭: 오래된 코드 호환
+        self.dev = self.ssd
+
+        # free threshold(비율) — cfg가 있으면 따라감
+        self.gc_free_block_threshold = float(
+            getattr(self.cfg, "gc_free_block_threshold", 0.0)
+        ) if self.cfg is not None else 0.0
+
+        # 내부 스텝 카운터 (ops 수)
         self.ops: int = 0
-        self.cold_pool: bool = bool(cold_pool)
-        self.bg = bg or BGSchedule()
-        self._policy = get_gc_policy(policy_name)  # 함수형(policy(blocks)->idx)
 
-        # 간단 라우터 상태(데모용): 외부에서 바꿔도 됨
-        self._last_stream: str = 'gen'  # 'hot'|'cold'|'gen'
-        # 시뮬레이터 time step(논리시각)
-        self._t: int = 0
+        # 기타 알 수 없는 키워드들은 조용히 무시 (하위호환 흡수)
+        _ = kwargs  # noqa
 
-        # 메트릭 훅(외부에서 교체 가능)
-        self.on_gc: Optional[Callable[[int, int], None]] = None  # (victim_idx, valid_moved)
+    # --------------- 내부: GC 선택/실행 ---------------
+    def _choose_policy(self) -> Callable[[List[Any]], Optional[int]]:
+        """외부 주입(sim.gc_policy)이 있으면 그것을 우선 사용."""
+        return self.gc_policy or self._policy
 
-        # free lists가 비어있다면 초기화 가정
-        if hasattr(self.dev, 'free_gen') and not self.dev.free_gen:
-            if hasattr(self.dev, 'blocks'):
-                n = len(self.dev.blocks)
-                self.dev.free_gen = list(range(n))
+    def _do_gc(self, cause: str = "bg") -> bool:
+        """한 번의 GC 실행. victim 선택 → SSD.collect_garbage 호출."""
+        blocks = getattr(self.ssd, "blocks", []) or []
+        if not blocks:
+            return False
+        policy = self._choose_policy()
 
-    # ---------------- Router ----------------
-    def choose_stream(self, lpn: int) -> str:
-        """외부 또는 실험 코드에서 self._last_stream만 바꿔도 동작.
-        여기서는 그대로 반환."""
-        return self._last_stream
+        # SSD API: collect_garbage(policy, cause="...") 지원
+        if hasattr(self.ssd, "collect_garbage"):
+            before_inv = sum(int(getattr(b, "invalid_count", 0)) for b in blocks)
+            try:
+                self.ssd.collect_garbage(policy=policy, cause=cause)
+            except TypeError:
+                # 구버전: 인자명 다른 경우 대비
+                self.ssd.collect_garbage(policy)
+            after_inv = sum(int(getattr(b, "invalid_count", 0)) for b in blocks)
+            moved = max(0, before_inv - after_inv)
 
-    # ---------------- Write / Trim ----------------
-    def write(self, lpn: int) -> Optional[Tuple[int, int]]:
-        stream = self.choose_stream(lpn)
-        blk_idx, blk = self._ensure_active_block(stream if self.cold_pool else 'gen')
-        ppn = self._allocate_page(blk)
-        if ppn is None:
-            # 공간 없으면 한 번 GC 시도 → 다시 alloc
-            self.gc_once(prefer_pool=stream if self.cold_pool else None)
-            ppn = self._allocate_page(blk)
-            if ppn is None:
-                # 여전히 실패하면 포기(상위에서 재시도)
-                return None
-        # hotness/age 업데이트
-        blk.hot_ewma = 0.9 * float(getattr(blk, 'hot_ewma', 0.0)) + 0.1 * 1.0
-        if hasattr(blk, 'age'): blk.age = int(getattr(blk,'age',0)) + 1
-        setattr(blk, 'last_prog_step', self._now())
-
-        self.ops += 1
-        # BG cadence
-        if self.ops % max(1, self.bg.every_hot) == 0:
-            self.run_bg_gc(pool='hot')
-        if self.ops % max(1, self.bg.every_cold) == 0:
-            self.run_bg_gc(pool='cold')
-        return (blk_idx, ppn)
-
-    def trim(self, blk_idx: int, page_idx: int) -> bool:
-        b = self.dev.blocks[blk_idx]
-        if 0 <= page_idx < b.pages_per_block and b.pages[page_idx] == PageState.VALID:
-            # invalidate
-            b.pages[page_idx] = PageState.INVALID
-            b.valid_count = int(getattr(b,'valid_count',0)) - 1
-            b.invalid_count = int(getattr(b,'invalid_count',0)) + 1
-            b.trimmed_pages = int(getattr(b,'trimmed_pages',0)) + 1
-            setattr(b, 'last_invalid_step', self._now())
+            if self.enable_trace:
+                self.trace["gc_event"].append({
+                    "step": self.ops,
+                    "cause": cause,
+                    "moved_valid": int(getattr(self.ssd, "last_gc_moved_valid", 0)),
+                    "free_blocks": _free_block_count(blocks),
+                })
             return True
         return False
 
-    # ---------------- GC core ----------------
-    def gc_once(self, prefer_pool: Optional[str] = None) -> Optional[int]:
-        """한 번의 컬렉션을 수행하고 victim 블록 인덱스를 반환."""
-        # 후보 집합 준비(필요 시 풀 필터)
-        enum = list(enumerate(self.dev.blocks))
-        if prefer_pool in ("hot","cold","gen"):
-            enum = [(i,b) for i,b in enum if getattr(b,'pool','gen')==prefer_pool]
-            if not enum:  # 풀에 후보 없으면 전체로 fallback
-                enum = list(enumerate(self.dev.blocks))
-
-        # 함수형 정책이 local 인덱스를 반환하므로 전역 인덱스로 변환 필요
-        blocks = [b for _,b in enum]
+    def _should_gc_by_free_ratio(self) -> bool:
+        """free 블록 비율이 cfg 임계치보다 낮으면 GC."""
+        thr = float(self.gc_free_block_threshold or 0.0)
+        if thr <= 0.0:
+            return False
+        blocks = getattr(self.ssd, "blocks", []) or []
         if not blocks:
-            return None
+            return False
+        free = _free_block_count(blocks)
+        ratio = free / max(1, len(blocks))
+        return ratio < thr
 
-        # top‑k 지원(선택)
-        victim_local_idx: Optional[int]
-        if self._policy.__name__ == 'cat_policy' and 'cat_policy_topk' in globals() and cat_policy_topk:
-            best_local, topk = cat_policy_topk(blocks, k=1)
-            victim_local_idx = best_local
-        else:
-            victim_local_idx = self._policy(blocks)
-
-        if victim_local_idx is None:
-            return None
-        victim_global_idx = enum[int(victim_local_idx)][0]
-        valid_moved = self._evacuate_and_erase(victim_global_idx)
-        if callable(self.on_gc):
-            try:
-                self.on_gc(victim_global_idx, valid_moved)
-            except Exception:
-                pass
-        return victim_global_idx
-
-    def run_bg_gc(self, pool: Optional[str] = None) -> Optional[int]:
-        return self.gc_once(prefer_pool=pool)
-
-    # ---------------- Internals ----------------
-    def _now(self) -> int:
-        self._t += 1
-        return self._t
-
-    def _ensure_active_block(self, stream: str) -> Tuple[int, Block]:
-        # Device.ensure_active_block과 역할 유사: 풀에서 블록 가져오기
-        # free list 우선, 없으면 빈 블록 스캔
-        pick_list_name = {
-            'hot': 'free_hot',
-            'cold': 'free_cold'
-        }.get(stream, 'free_gen')
-
-        flist = getattr(self.dev, pick_list_name, None)
-        if isinstance(flist, list) and flist:
-            idx = flist.pop()  # LIFO 재사용
-            blk = self.dev.blocks[idx]
-            blk.pool = stream
-            return idx, blk
-
-        # 빈 블록 탐색
-        for i, b in enumerate(self.dev.blocks):
-            if all(p == PageState.FREE for p in b.pages):
-                b.pool = stream
-                return i, b
-
-        # 아무 것도 없으면 그냥 가장 적게 마모된 블록 재사용(데모용 fallback)
-        wears = [int(getattr(b,'erase_count',0)) for b in self.dev.blocks]
-        idx = min(range(len(wears)), key=lambda i: wears[i])
-        blk = self.dev.blocks[idx]
-        return idx, blk
-
-    def _allocate_page(self, blk: Block) -> Optional[int]:
-        for i, s in enumerate(blk.pages):
-            if s == PageState.FREE:
-                blk.pages[i] = PageState.VALID
-                blk.valid_count = int(getattr(blk,'valid_count',0)) + 1
-                return i
-        return None
-
-    def _evacuate_and_erase(self, idx: int) -> int:
-        """유효 페이지를 다른 블록으로 옮기고 victim 블록을 erase.
-        여기서는 간단히 유효 카운트만 집계하고, 실제 복사는 생략(프로젝트 원본 로직에 연결 권장).
+    # --------------- 퍼블릭: 워크로드 실행 ---------------
+    def run(self, workload: List[Any]) -> None:
         """
-        b = self.dev.blocks[idx]
-        valid = int(getattr(b,'valid_count',0))
-        # (실제 구현에서는 유효 페이지를 새 블록에 재기록하고 매핑 업데이트)
-        # 블록 erase
-        self._erase_block(idx)
-        # 풀 복귀
-        pool = getattr(b,'pool','gen')
-        if pool == 'hot' and hasattr(self.dev,'free_hot'):
-            self.dev.free_hot.append(idx)
-        elif pool == 'cold' and hasattr(self.dev,'free_cold'):
-            self.dev.free_cold.append(idx)
-        elif hasattr(self.dev,'free_gen'):
-            self.dev.free_gen.append(idx)
-        return valid
+        workload 형식:
+          - [lpn, lpn, ...]               (기본)
+          - [("write"| "trim", lpn), ...] (enable_trim=True인 경우)
+        """
+        # 간단한 BG cadence 카운터
+        t_hot = t_cold = t_gen = 0
 
-    def _erase_block(self, idx: int):
-        b = self.dev.blocks[idx]
-        pages = getattr(b, 'pages_per_block', len(getattr(b,'pages',[])))
-        b.pages = [PageState.FREE] * pages
-        b.invalid_count = 0
-        b.valid_count = 0
-        b.trimmed_pages = 0
-        b.erase_count = int(getattr(b,'erase_count',0)) + 1
-        b.age = 0
-        setattr(b, 'last_prog_step', self._now())
+        for op in workload:
+            # --- op decode ---
+            if isinstance(op, (list, tuple)) and len(op) == 2:
+                kind, lpn = op[0], int(op[1])
+                if kind == "trim":
+                    if hasattr(self.ssd, "trim_lpn"):
+                        self.ssd.trim_lpn(lpn)
+                else:
+                    # default write
+                    if hasattr(self.ssd, "write_lpn"):
+                        self.ssd.write_lpn(lpn)
+            else:
+                # 기본: 정수 = write LPN
+                lpn = int(op)
+                if hasattr(self.ssd, "write_lpn"):
+                    self.ssd.write_lpn(lpn)
+
+            self.ops += 1
+            t_hot += 1; t_cold += 1; t_gen += 1
+
+            # --- BG cadence 기반 GC (옵션) ---
+            did = False
+            if self.bg.every_gen and t_gen >= self.bg.every_gen:
+                did = self._do_gc(cause="bg_gen")
+                t_gen = 0
+            # (필요 시 hot/cold도 사용)
+            if not did and self.bg.every_hot and t_hot >= self.bg.every_hot:
+                did = self._do_gc(cause="bg_hot")
+                t_hot = 0
+            if not did and self.bg.every_cold and t_cold >= self.bg.every_cold:
+                did = self._do_gc(cause="bg_cold")
+                t_cold = 0
+
+            # --- free 비율 임계 기반 GC (cfg가 설정된 경우) ---
+            if not did and self._should_gc_by_free_ratio():
+                self._do_gc(cause="low_free")
+
+    # --------------- 편의 프로퍼티 ---------------
+    @property
+    def pages_per_block(self) -> int:
+        return _pages_per_block(self.ssd)
+
+    @property
+    def free_blocks(self) -> int:
+        blocks = getattr(self.ssd, "blocks", []) or []
+        return _free_block_count(blocks)

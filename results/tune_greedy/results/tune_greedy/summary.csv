@@ -1,0 +1,2 @@
+bg_gc_every,device_writes,free_blocks,free_pages,gc_avg_s,gc_count,host_writes,hot_ratio,hot_weight,invalid_pages,note,ops,pages_per_block,policy,reheat_rate,run_id,seed,total_pages,transition_rate,trim_enabled,trim_ratio,trimmed_pages,ts,update_ratio,valid_pages,waf,warmup_fill,wear_avg,wear_max,wear_min,wear_std
+256,223473,8,527,5.9e-05,2904,189979,0.2,0.7,12771,tune greedy,200000,64,greedy,0.090234,tune greedy,42,16384,0.189063,1,0.05,680,2025-10-30T22:16:41,0.8,3086,1.176304,0.0,12.671875,17.0,5.0,1.241278

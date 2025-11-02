@@ -66,8 +66,8 @@ def bsgc_policy(blocks, alpha=0.7, beta=0.3):
             best_score, best_idx = s, i
     return best_idx
 
-# ---------- CAT (Cold-Aware with Temperature & Age) ----------
-def cat_policy(blocks, alpha=0.55, beta=0.25, gamma=0.15, delta=0.05):
+# ---------- COTA (Cost-over-Temperature-and-Age) ----------
+def cota_policy(blocks, alpha=0.55, beta=0.25, gamma=0.15, delta=0.05):
     """
     score = α*invalid_ratio + β*(1-hotness) + γ*age_norm + δ*(1-wear_norm)
     """
@@ -164,7 +164,7 @@ def get_gc_policy(name: str):
     if n == "greedy":  return greedy_policy
     if n in ("cb", "cost_benefit"): return cb_policy
     if n == "bsgc":    return bsgc_policy
-    if n == "cat":     return cat_policy
+    if n == "cota":     return cota_policy
     if n in ("atcb", "atcb_policy"):
         # 하이퍼파라/now_step은 run_sim.py에서 partial/래핑으로 주입 가능
         return lambda blocks: atcb_policy(blocks)

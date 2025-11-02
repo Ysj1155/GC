@@ -34,13 +34,13 @@ def main():
     ap.add_argument("--warmup_fill", type=float, default=0.0)
 
     ap.add_argument("--gc_policy", type=str, default="greedy",
-                    choices=["greedy","cb","cost_benefit","bsgc","cat","atcb","re50315"])
+                    choices=["greedy","cb","cost_benefit","bsgc","cota","atcb","re50315"])
 
-    # CAT 확장 파라미터 (gc_algos에 주입 — experiments.run_once 내부에서 처리)
-    ap.add_argument("--cat_alpha", type=float, default=None)
-    ap.add_argument("--cat_beta", type=float, default=None)
-    ap.add_argument("--cat_gamma", type=float, default=None)
-    ap.add_argument("--cat_delta", type=float, default=None)
+    # COTA 확장 파라미터 (gc_algos에 주입 — experiments.run_once 내부에서 처리)
+    ap.add_argument("--cota_alpha", type=float, default=None)
+    ap.add_argument("--cota_beta", type=float, default=None)
+    ap.add_argument("--cota_gamma", type=float, default=None)
+    ap.add_argument("--cota_delta", type=float, default=None)
     ap.add_argument("--cold_victim_bias", type=float, default=1.0)
     ap.add_argument("--trim_age_bonus", type=float, default=0.0)
     ap.add_argument("--victim_prefetch_k", type=int, default=1)
@@ -102,6 +102,22 @@ def main():
         for r in runs:
             print("\t".join(str(r.get(c, "")) for c in cols))
 
+    # === 완료 알림: summary CSV 경로/파일명 출력 ===
+    if args.out_csv:
+        csv_path = args.out_csv
+        # 상대경로일 경우 보기 좋게 절대경로로 바꿔서 보여줌
+        if not os.path.isabs(csv_path):
+            # 사용자가 폴더 포함 경로를 준 경우 그대로 절대화, 아니면 out_dir 밑으로 해석
+            csv_path = os.path.abspath(
+                csv_path if os.path.dirname(csv_path) else os.path.join(args.out_dir, csv_path)
+            )
+        else:
+            csv_path = os.path.abspath(csv_path)
+
+        if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+            print(f"[SWEEP DONE] 결과 CSV 생성 완료 → {csv_path}")
+        else:
+            print(f"[SWEEP DONE] 실행 종료. CSV가 보이지 않습니다. 경로 확인: {csv_path}")
 
 if __name__ == "__main__":
     main()

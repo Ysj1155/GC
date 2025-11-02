@@ -81,13 +81,6 @@ def _inject_policy(args, sim: Simulator):
         gc_algos.config_trim_age_bonus(args.trim_age_bonus)
     if hasattr(gc_algos, "config_victim_prefetch_k"):
         gc_algos.config_victim_prefetch_k(args.victim_prefetch_k)
-    if hasattr(gc_algos, "config_cat_weights"):
-        # alpha/beta/gamma/delta 중 None 아닌 것만 반영
-        w = dict(alpha=args.cat_alpha, beta=args.cat_beta, gamma=args.cat_gamma, delta=args.cat_delta)
-        # None 방지
-        w = {k: v for k, v in w.items() if v is not None}
-        if w:
-            gc_algos.config_cat_weights(**w)
 
     # ---- 기본 정책들 ----
     if name in ("greedy",):
@@ -102,8 +95,20 @@ def _inject_policy(args, sim: Simulator):
         sim.gc_policy = getattr(gc_algos, "bsgc_policy")
         return
 
-    if name in ("cat",):
-        sim.gc_policy = getattr(gc_algos, "cat_policy")
+    if name == "cota":
+        base = gc_algos.cota_policy
+        a, b, g, d = args.cota_alpha, args.cota_beta, args.cota_gamma, args.cota_delta
+        if any(v is not None for v in (a,b,g,d)):
+            def cota_with_w(blocks, _a=a, _b=b, _g=g, _d=d):
+                kw = {}
+                if _a is not None: kw["alpha"] = _a
+                if _b is not None: kw["beta"] = _b
+                if _g is not None: kw["gamma"] = _g
+                if _d is not None: kw["delta"] = _d
+                return base(blocks, **kw)
+            sim.gc_policy = cota_with_w
+        else:
+            sim.gc_policy = base
         return
 
     # ---- 확장 정책들 (atcb / re50315) ----
@@ -154,14 +159,14 @@ def main():
 
     # ---- 정책 선택 & 파라미터 ----
     ap.add_argument("--gc_policy", type=str, default="greedy",
-                    choices=["greedy", "cb", "cost_benefit", "bsgc", "cat", "atcb", "re50315"],
+                    choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"],
                     help="GC 정책 선택")
 
-    # CAT 확장 옵션(있을 때만 적용)
-    ap.add_argument("--cat_alpha", type=float, default=None, help="CAT α (invalid)")
-    ap.add_argument("--cat_beta",  type=float, default=None, help="CAT β (1-hot)")
-    ap.add_argument("--cat_gamma", type=float, default=None, help="CAT γ (age)")
-    ap.add_argument("--cat_delta", type=float, default=None, help="CAT δ (1-wear)")
+    # COTA 파라미터
+    ap.add_argument("--cota_alpha", type=float, default=None, help="COTA α (invalid)")
+    ap.add_argument("--cota_beta",  type=float, default=None, help="COTA β (1-hot)")
+    ap.add_argument("--cota_gamma", type=float, default=None, help="COTA γ (age)")
+    ap.add_argument("--cota_delta", type=float, default=None, help="COTA δ (1-wear)")
     ap.add_argument("--cold_victim_bias", type=float, default=1.0, help="cold 풀 가점(>1.0)")
     ap.add_argument("--trim_age_bonus", type=float, default=0.0, help="TRIM 비율 기반 age 보너스")
     ap.add_argument("--victim_prefetch_k", type=int, default=1, help="victim 후보 top-K")

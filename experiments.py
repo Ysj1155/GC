@@ -6,8 +6,6 @@ import json
 import argparse
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
-
-# 프로젝트 모듈
 from config import SimConfig
 from simulator import Simulator
 from workload import make_workload
@@ -49,46 +47,60 @@ def _infer_user_total_pages(cfg) -> int:
 
 def _inject_policy(args, sim: Simulator):
     name = (args.gc_policy or "").lower()
-    # CAT 확장 (존재시만 적용)
+
+    # 공통 전역 설정(있을 때만)
     if hasattr(gc_algos, "config_cold_bias"):
-        gc_algos.config_cold_bias(args.cold_victim_bias)
+        gc_algos.config_cold_bias(getattr(args, "cold_victim_bias", 1.0))
     if hasattr(gc_algos, "config_trim_age_bonus"):
-        gc_algos.config_trim_age_bonus(args.trim_age_bonus)
+        gc_algos.config_trim_age_bonus(getattr(args, "trim_age_bonus", 0.0))
     if hasattr(gc_algos, "config_victim_prefetch_k"):
-        gc_algos.config_victim_prefetch_k(args.victim_prefetch_k)
-    if hasattr(gc_algos, "config_cat_weights"):
-        w = {k: getattr(args, k) for k in ("cat_alpha","cat_beta","cat_gamma","cat_delta") if getattr(args,k) is not None}
-        if w:
-            gc_algos.config_cat_weights(**w)
+        gc_algos.config_victim_prefetch_k(getattr(args, "victim_prefetch_k", 1))
 
     if name in ("greedy",):
-        sim.gc_policy = getattr(gc_algos, "greedy_policy")
-    elif name in ("cb","cost_benefit"):
-        sim.gc_policy = getattr(gc_algos, "cb_policy")
-    elif name in ("bsgc",):
-        sim.gc_policy = getattr(gc_algos, "bsgc_policy")
-    elif name in ("cat",):
-        sim.gc_policy = getattr(gc_algos, "cat_policy")
-    elif name in ("atcb","atcb_policy"):
-        atcb_policy = getattr(gc_algos, "atcb_policy", None)
-        if atcb_policy is None:
-            raise RuntimeError("gc_algos.atcb_policy 없음")
+        sim.gc_policy = getattr(gc_algos, "greedy_policy"); return
+    if name in ("cb","cost_benefit"):
+        sim.gc_policy = getattr(gc_algos, "cb_policy"); return
+    if name in ("bsgc",):
+        sim.gc_policy = getattr(gc_algos, "bsgc_policy"); return
+    if name in ("cota",):
+        def cota_with_weights(blocks,
+                              a=args.cota_alpha, b=args.cota_beta,
+                              g=args.cota_gamma, d=args.cota_delta):
+            kw = {}
+            if a is not None: kw["alpha"]=a
+            if b is not None: kw["beta"]=b
+            if g is not None: kw["gamma"]=g
+            if d is not None: kw["delta"]=d
+            return gc_algos.cota_policy(blocks, **kw) if kw else gc_algos.cota_policy(blocks)
+        sim.gc_policy = cota_with_weights
+    if name in ("atcb","atcb_policy"):
+        atcb = getattr(gc_algos, "atcb_policy")
         def atcb_with_now(blocks, _sim=sim):
-            return atcb_policy(blocks,
-                alpha=args.atcb_alpha, beta=args.atcb_beta,
-                gamma=args.atcb_gamma, eta=args.atcb_eta,
-                now_step=_sim.ssd._step)
-        sim.gc_policy = atcb_with_now
-    elif name in ("re50315","re50315_policy"):
-        re = getattr(gc_algos, "re50315_policy", None)
-        if re is None:
-            raise RuntimeError("gc_algos.re50315_policy 없음")
-        def re_with_now(blocks, _sim=sim):
-            return re(blocks, K=args.re50315_K, now_step=_sim.ssd._step)
-        sim.gc_policy = re_with_now
-    else:
-        raise ValueError(f"지원하지 않는 GC 정책: {args.gc_policy}")
+            return atcb(blocks,
+                        alpha=getattr(args,"atcb_alpha",0.5),
+                        beta=getattr(args,"atcb_beta",0.3),
+                        gamma=getattr(args,"atcb_gamma",0.1),
+                        eta=getattr(args,"atcb_eta",0.1),
+                        now_step=_sim.ssd._step)
+        sim.gc_policy = atcb_with_now; return
 
+    if name in ("re50315","re50315_policy"):
+        re = getattr(gc_algos, "re50315_policy")
+        def re_with_now(blocks, _sim=sim):
+            return re(blocks, K=getattr(args,"re50315_K",1.0), now_step=_sim.ssd._step)
+        sim.gc_policy = re_with_now; return
+
+    raise ValueError(f"지원하지 않는 GC 정책: {args.gc_policy}")
+
+def _merge_cota_weights(args):
+    def g(pfx):
+        return dict(alpha=getattr(args, f"{pfx}_alpha", None),
+                    beta =getattr(args, f"{pfx}_beta",  None),
+                    gamma=getattr(args, f"{pfx}_gamma", None),
+                    delta=getattr(args, f"{pfx}_delta", None))
+    new, old = g("cota"), g("cat")
+    w = {k: (new[k] if new[k] is not None else old[k]) for k in ("alpha","beta","gamma","delta")}
+    return {k: v for k, v in w.items() if v is not None}
 
 # ------------------------------------------------------------
 # 단일 실행
@@ -140,25 +152,26 @@ def run_once(args, out_dir: str, out_csv: Optional[str]) -> Dict[str, Any]:
     sim.run(wl)
 
     meta = {
-        "run_id": args.note or f"{args.gc_policy}_{args.seed}",
+        "run_id": getattr(args, "note", None) or f"{args.gc_policy}_{args.seed}",
         "policy": args.gc_policy,
         "ops": args.ops,
         "seed": args.seed,
         "update_ratio": args.update_ratio,
         "hot_ratio": args.hot_ratio,
         "hot_weight": args.hot_weight,
-        "trim_enabled": 1 if args.enable_trim else 0,
-        "trim_ratio": args.trim_ratio,
+        "trim_enabled": 1 if getattr(args, "enable_trim", False) else 0,
+        "trim_ratio": getattr(args, "trim_ratio", 0.0),
         "warmup_fill": args.warmup_fill,
         "bg_gc_every": args.bg_gc_every,
         "ts": datetime.now().isoformat(timespec="seconds"),
-        # CAT 메타
-        "cat_alpha": args.cat_alpha,
-        "cat_beta": args.cat_beta,
-        "cat_gamma": args.cat_gamma,
-        "cat_delta": args.cat_delta,
+
+        # COTA 표준 컬럼
+        "cota_alpha": args.cota_alpha,
+        "cota_beta":  args.cota_beta,
+        "cota_gamma": args.cota_gamma,
+        "cota_delta": args.cota_delta,
         "cold_victim_bias": args.cold_victim_bias,
-        "trim_age_bonus": args.trim_age_bonus,
+        "trim_age_bonus":   args.trim_age_bonus,
         "victim_prefetch_k": args.victim_prefetch_k,
     }
 
@@ -259,13 +272,13 @@ def main():
     ap.add_argument("--warmup_fill", type=float, default=0.0)
 
     ap.add_argument("--gc_policy", type=str, default="greedy",
-                    choices=["greedy","cb","cost_benefit","bsgc","cat","atcb","re50315"])
+                    choices=["greedy","cb","cost_benefit","bsgc","cota","atcb","re50315"])
 
-    # CAT 확장
-    ap.add_argument("--cat_alpha", type=float, default=None)
-    ap.add_argument("--cat_beta", type=float, default=None)
-    ap.add_argument("--cat_gamma", type=float, default=None)
-    ap.add_argument("--cat_delta", type=float, default=None)
+    # COTA 확장
+    ap.add_argument("--cota_alpha", type=float, default=None)
+    ap.add_argument("--cota_beta", type=float, default=None)
+    ap.add_argument("--cota_gamma", type=float, default=None)
+    ap.add_argument("--cota_delta", type=float, default=None)
     ap.add_argument("--cold_victim_bias", type=float, default=1.0)
     ap.add_argument("--trim_age_bonus", type=float, default=0.0)
     ap.add_argument("--victim_prefetch_k", type=int, default=1)
