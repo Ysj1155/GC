@@ -73,6 +73,7 @@ def _inject_policy(args, sim: Simulator):
             if d is not None: kw["delta"]=d
             return gc_algos.cota_policy(blocks, **kw) if kw else gc_algos.cota_policy(blocks)
         sim.gc_policy = cota_with_weights
+        return
     if name in ("atcb","atcb_policy"):
         atcb = getattr(gc_algos, "atcb_policy")
         def atcb_with_now(blocks, _sim=sim):
@@ -92,15 +93,61 @@ def _inject_policy(args, sim: Simulator):
 
     raise ValueError(f"지원하지 않는 GC 정책: {args.gc_policy}")
 
-def _merge_cota_weights(args):
-    def g(pfx):
-        return dict(alpha=getattr(args, f"{pfx}_alpha", None),
-                    beta =getattr(args, f"{pfx}_beta",  None),
-                    gamma=getattr(args, f"{pfx}_gamma", None),
-                    delta=getattr(args, f"{pfx}_delta", None))
-    new, old = g("cota"), g("cat")
-    w = {k: (new[k] if new[k] is not None else old[k]) for k in ("alpha","beta","gamma","delta")}
-    return {k: v for k, v in w.items() if v is not None}
+def _quick_qc(row: dict) -> bool:
+    warn = []
+    def g(k, default=None): return row.get(k, default)
+
+    waf = g("waf")
+    host = g("host_writes")
+    dev  = g("device_writes")
+    gc_n = g("gc_count")
+    gc_t = g("gc_avg_s")
+    fb   = g("free_blocks")
+    fp   = g("free_pages")
+    vp   = g("valid_pages")
+    ip   = g("invalid_pages")
+    tp   = g("total_pages")
+    ws   = g("wear_std")
+    wmin = g("wear_min")
+    wmax = g("wear_max")
+    tr   = g("transition_rate")
+    rr   = g("reheat_rate")
+    trim = g("trimmed_pages")
+
+    # 기본 물리/지표 무결성
+    if waf is None or waf < 1.0: warn.append(f"WAF={waf} (기본적으로 >= 1.0 이어야 정상)")
+    if host is not None and dev is not None and dev < host: warn.append(f"device_writes({dev}) < host_writes({host})")
+    if gc_n is not None and gc_n < 0: warn.append(f"gc_count={gc_n} (<0)")
+    if gc_t is not None and gc_t < 0: warn.append(f"gc_avg_s={gc_t} (<0)")
+    if fb is not None and fb <= 0: warn.append(f"free_blocks={fb} (<=0)")
+
+    # 페이지 합 일치성(가능할 때만 검사)
+    if all(x is not None for x in (vp, ip, fp, tp)):
+        if (vp + ip + fp) != tp:
+            warn.append(f"valid+invalid+free != total_pages ({vp}+{ip}+{fp} != {tp})")
+
+    # wear 일관성
+    if ws is not None and ws < 0: warn.append(f"wear_std={ws} (<0)")
+    if wmin is not None and wmax is not None and wmax < wmin:
+        warn.append(f"wear_max({wmax}) < wear_min({wmin})")
+
+    # 비율 범위
+    for name, val in [("transition_rate", tr), ("reheat_rate", rr)]:
+        if val is not None and not (0.0 <= val <= 1.0):
+            warn.append(f"{name}={val} (0~1 범위 밖)")
+
+    # TRIM
+    if trim is not None and trim < 0:
+        warn.append(f"trimmed_pages={trim} (<0)")
+    if trim is not None and tp is not None and trim > tp:
+        warn.append(f"trimmed_pages({trim}) > total_pages({tp})")
+
+    if warn:
+        print("[QC] WARN:", " | ".join(warn))
+        return False
+    else:
+        print("[QC] OK  :", f"policy={g('policy')} seed={g('seed')} waf={waf}")
+        return True
 
 # ------------------------------------------------------------
 # 단일 실행
@@ -165,20 +212,22 @@ def run_once(args, out_dir: str, out_csv: Optional[str]) -> Dict[str, Any]:
         "bg_gc_every": args.bg_gc_every,
         "ts": datetime.now().isoformat(timespec="seconds"),
 
-        # COTA 표준 컬럼
-        "cota_alpha": args.cota_alpha,
-        "cota_beta":  args.cota_beta,
-        "cota_gamma": args.cota_gamma,
-        "cota_delta": args.cota_delta,
-        "cold_victim_bias": args.cold_victim_bias,
-        "trim_age_bonus":   args.trim_age_bonus,
-        "victim_prefetch_k": args.victim_prefetch_k,
+    # COTA 표준 컬럼
+    "cota_alpha": getattr(args, "cota_alpha", None),
+    "cota_beta":  getattr(args, "cota_beta",  None),
+    "cota_gamma": getattr(args, "cota_gamma", None),
+    "cota_delta": getattr(args, "cota_delta", None),
+    "cold_victim_bias": getattr(args, "cold_victim_bias", 1.0),
+    "trim_age_bonus":   getattr(args, "trim_age_bonus", 0.0),
+    "victim_prefetch_k":getattr(args, "victim_prefetch_k", 1),
     }
 
     if out_csv:
         append_summary_csv(out_csv, sim, meta)
-    return summary_row(sim, meta)
 
+    row = summary_row(sim, meta)
+    _quick_qc(row)  # ← 여기 추가 (경고/OK를 콘솔에 출력)
+    return row
 
 # ------------------------------------------------------------
 # GRID 빌더
@@ -190,7 +239,7 @@ def _parse_csv_list(s: str) -> List[str]:
 
 def build_grid(args) -> List[Dict[str, Any]]:
     """간단한 그리드 생성기.
-    예: --grid "gc_policy=cat,greedy; update_ratio=0.5,0.9; seed=1,2"
+    예: --grid "gc_policy=cota,greedy; update_ratio=0.5,0.9; seed=1,2"
     → 매개변수 데카르트 곱 생성.
     """
     items: List[List[tuple[str, Any]]] = []
@@ -299,6 +348,8 @@ def main():
     ap.add_argument("--out_dir", type=str, default="results/exp")
     ap.add_argument("--out_csv", type=str, default="results/exp/summary.csv")
     ap.add_argument("--note", type=str, default="")
+    ap.add_argument("--qc", type=str, default="warn", choices=["off", "warn", "strict"],
+                    help="off=미실행, warn=경고만 출력, strict=경고 시 종료")
 
     args = ap.parse_args()
 
@@ -339,16 +390,12 @@ def main():
 
     # 콘솔 요약 출력
     if runs:
-        # 간단 테이블 헤더
-        cols = [
-            "policy","ops","seed","waf","gc_count","free_blocks",
-            "wear_avg","wear_std","trimmed_pages","transition_rate","reheat_rate"
-        ]
-        hdr = "\t".join(cols)
-        print(hdr)
+        cols = ["policy", "ops", "seed", "waf", "gc_count", "free_blocks",
+                "wear_avg", "wear_std", "trimmed_pages", "transition_rate", "reheat_rate"]
+        print("\t".join(cols))
         for r in runs:
-            print("\t".join(str(r.get(c, "")) for c in cols))
-
+            # None -> "" 처리
+            print("\t".join("" if r.get(c) is None else str(r.get(c)) for c in cols))
 
 if __name__ == "__main__":
     main()

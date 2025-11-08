@@ -1,9 +1,5 @@
-out_dir: results/2025-10-26
-
-seeds: [101,102,103,104,105,106,107,108,109,110]
-
-matrix:
-  - {policy: greedy, ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.00, warmup_fill: 0.6}
-  - {policy: cat,    ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.00, warmup_fill: 0.6}
-  - {policy: cb,     ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.00, warmup_fill: 0.6}
-  - {policy: bsgc,   ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.00, warmup_fill: 0.6}
+scenarios:
+  - {gc_policy: greedy, ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.0, warmup_fill: 0.6, out_dir: results/2025-10-26, out_csv: results/2025-10-26/summary.csv}
+  - {gc_policy: cota,   ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.0, warmup_fill: 0.6, out_dir: results/2025-10-26, out_csv: results/2025-10-26/summary.csv}
+  - {gc_policy: cb,     ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.0, warmup_fill: 0.6, out_dir: results/2025-10-26, out_csv: results/2025-10-26/summary.csv}
+  - {gc_policy: bsgc,   ops: 200000, update_ratio: 0.8, hot_ratio: 0.2, hot_weight: 0.7, trim_ratio: 0.0, warmup_fill: 0.6, out_dir: results/2025-10-26, out_csv: results/2025-10-26/summary.csv}

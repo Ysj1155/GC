@@ -4,7 +4,7 @@ from datetime import datetime
 from config import SimConfig
 from simulator import Simulator
 from workload import make_workload
-from metrics import append_summary_csv
+from metrics import append_summary_csv, summary_row
 import gc_algos
 
 # ------------------------------
@@ -65,16 +65,77 @@ def _infer_user_total_pages(cfg) -> int:
         "필요 필드(user_total_pages / (blocks*ppb*ratio) / total_pages)를 확인하세요."
     )
 
+def _quick_qc(row: dict) -> bool:
+    warn = []
+    g = row.get
+
+    waf = g("waf")
+    host = g("host_writes")
+    dev  = g("device_writes")
+    gc_n = g("gc_count")
+    gc_t = g("gc_avg_s")
+    fb   = g("free_blocks")
+    fp   = g("free_pages")
+    vp   = g("valid_pages")
+    ip   = g("invalid_pages")
+    tp   = g("total_pages")
+    ws   = g("wear_std")
+    wmin = g("wear_min")
+    wmax = g("wear_max")
+    tr   = g("transition_rate")
+    rr   = g("reheat_rate")
+    trim = g("trimmed_pages")
+
+    # 기본 무결성
+    if waf is None or waf < 1.0:
+        warn.append(f"WAF={waf} (기본적으로 >= 1.0 이어야 정상)")
+    if host is not None and dev is not None and dev < host:
+        warn.append(f"device_writes({dev}) < host_writes({host})")
+    if gc_n is not None and gc_n < 0:
+        warn.append(f"gc_count={gc_n} (<0)")
+    if gc_t is not None and gc_t < 0:
+        warn.append(f"gc_avg_s={gc_t} (<0)")
+    if fb is not None and fb <= 0:
+        warn.append(f"free_blocks={fb} (<=0)")
+
+    # 페이지 합 일치성(가능할 때만)
+    if all(x is not None for x in (vp, ip, fp, tp)):
+        if (vp + ip + fp) != tp:
+            warn.append(f"valid+invalid+free != total_pages ({vp}+{ip}+{fp} != {tp})")
+
+    # wear 일관성
+    if ws is not None and ws < 0:
+        warn.append(f"wear_std={ws} (<0)")
+    if wmin is not None and wmax is not None and wmax < wmin:
+        warn.append(f"wear_max({wmax}) < wear_min({wmin})")
+
+    # 비율 범위
+    for name, val in [("transition_rate", tr), ("reheat_rate", rr)]:
+        if val is not None and not (0.0 <= val <= 1.0):
+            warn.append(f"{name}={val} (0~1 범위 밖)")
+
+    # TRIM
+    if trim is not None and trim < 0:
+        warn.append(f"trimmed_pages={trim} (<0)")
+    if trim is not None and tp is not None and trim > tp:
+        warn.append(f"trimmed_pages({trim}) > total_pages({tp})")
+
+    if warn:
+        print("[QC] WARN:", " | ".join(warn))
+        return False
+    else:
+        print("[QC] OK  :", f"policy={g('policy')} seed={g('seed')} waf={waf}")
+        return True
 
 def _inject_policy(args, sim: Simulator):
     """
     args.gc_policy 문자열에 따라 sim.gc_policy를 주입한다.
     now_step이 필요한 정책은 래핑하여 전달.
-    CAT 확장 설정(콜드 바이어스/트림 보너스/top-k/가중치)은 gc_algos 전역에 반영.
+    COTA 확장 설정(콜드 바이어스/트림 보너스/top-k/가중치)은 gc_algos 전역에 반영.
     """
     name = (args.gc_policy or "").lower()
 
-    # ---- CAT 확장 설정 주입 (있을 때만 안전 적용) ----
+    # ---- COTA 확장 설정 주입 (있을 때만 안전 적용) ----
     if hasattr(gc_algos, "config_cold_bias"):
         gc_algos.config_cold_bias(args.cold_victim_bias)
     if hasattr(gc_algos, "config_trim_age_bonus"):
@@ -187,6 +248,8 @@ def main():
     ap.add_argument("--trace_csv", type=str, default=None, help="옵션: trace CSV (시뮬레이터가 지원 시)")
     ap.add_argument("--gc_events_csv", type=str, default=None, help="per-GC 이벤트 로그 CSV (실행 후 저장)")
     ap.add_argument("--note", type=str, default="", help="메모/주석")
+    ap.add_argument("--qc", type=str, default="warn", choices=["off", "warn", "strict"],
+                    help="off=미실행, warn=경고만 출력, strict=경고 시 비정상 종료")
 
     args = ap.parse_args()
 
@@ -265,8 +328,24 @@ def main():
             "bg_gc_every": args.bg_gc_every,
             "note": args.note,
             "ts": datetime.now().isoformat(timespec="seconds"),
+
+            "cota_alpha": getattr(args, "cota_alpha", None),
+            "cota_beta": getattr(args, "cota_beta", None),
+            "cota_gamma": getattr(args, "cota_gamma", None),
+            "cota_delta": getattr(args, "cota_delta", None),
+            "cold_victim_bias": getattr(args, "cold_victim_bias", 1.0),
+            "trim_age_bonus": getattr(args, "trim_age_bonus", 0.0),
+            "victim_prefetch_k": getattr(args, "victim_prefetch_k", 1),
         }
-        append_summary_csv(out_csv_path, sim, meta)
+        row = summary_row(sim, meta)
+        if args.qc != "off":
+            ok = _quick_qc(row)
+            if args.qc == "strict" and not ok:
+                raise SystemExit(2)
+
+        if out_csv_path:
+            append_summary_csv(out_csv_path, sim, meta)
+            print(f"[RUN DONE] 결과 CSV append → {out_csv_path}")
 
     # trace
     if trace_csv_path and getattr(sim, "trace", None):

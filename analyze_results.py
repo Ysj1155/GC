@@ -81,7 +81,7 @@ def plot_waf_by_policy(df: pd.DataFrame, out_path: str):
     order = sorted(df[col_policy].dropna().unique())
     data = [df[df[col_policy]==p][col_waf].astype(float) for p in order]
     plt.figure()
-    plt.boxplot(data, labels=order, showmeans=True)
+    plt.boxplot(data, tick_labels=order, showmeans=True)
     plt.title("WAF by Policy")
     plt.ylabel("WAF")
     plt.grid(True, linestyle=":", alpha=0.5)
