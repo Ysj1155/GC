@@ -226,8 +226,8 @@ def run_once(args, out_dir: str, out_csv: Optional[str]) -> Dict[str, Any]:
         append_summary_csv(out_csv, sim, meta)
 
     row = summary_row(sim, meta)
-    _quick_qc(row)  # ← 여기 추가 (경고/OK를 콘솔에 출력)
-    return row
+    ok = _quick_qc(row)  # ← 여기 추가 (경고/OK를 콘솔에 출력)
+    return row, ok
 
 # ------------------------------------------------------------
 # GRID 빌더
@@ -297,7 +297,6 @@ def load_scenarios(path: str) -> List[Dict[str, Any]]:
         return data  # type: ignore
     raise RuntimeError("시나리오 파일 형식이 잘못되었습니다 (list 또는 {scenarios: [...]})")
 
-
 # ------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------
@@ -358,6 +357,15 @@ def main():
 
     runs: List[Dict[str, Any]] = []
 
+    def handle_qc(row, ok: bool):
+        if args.qc == "off":
+            return
+        if args.qc == "warn":
+            # _quick_qc 안에서 이미 출력했으니 여기선 아무 것도 안 해도 됨
+            return
+        if args.qc == "strict" and not ok:
+            raise SystemExit("QC failed (strict mode). 실험을 중단합니다.")
+
     if args.scenarios:
         # YAML 파일의 각 항목을 args에 병합하여 실행
         scs = load_scenarios(args.scenarios)
@@ -373,8 +381,9 @@ def main():
                 d2 = d.copy()
                 d2["seed"] = base_seed + r
                 ns = argparse.Namespace(**d2)
-                row = run_once(ns, args.out_dir, out_csv)
+                row, ok = run_once(ns, args.out_dir, out_csv)
                 runs.append(row)
+                handle_qc(row, ok)
     else:
         # grid 또는 단일 실행
         grid = build_grid(args)
@@ -385,9 +394,9 @@ def main():
                 conf2 = conf.copy()
                 conf2["seed"] = base_seed + r
                 ns = argparse.Namespace(**conf2)
-                row = run_once(ns, args.out_dir, out_csv)
+                row, ok = run_once(ns, args.out_dir, out_csv)
                 runs.append(row)
-
+                handle_qc(row, ok)
     # 콘솔 요약 출력
     if runs:
         cols = ["policy", "ops", "seed", "waf", "gc_count", "free_blocks",

@@ -51,7 +51,10 @@ SSD는 erase-before-write 특성 때문에 GC가 필수이며, GC는 **쓰기 �
 ├─ sweep.py # 간단 스윕 + 완료 메시지 출력  
 ├─ metrics.py # 요약/헤더 병합 CSV 유틸  
 ├─ analyze_results.py # (옵션) 결과 병합·요약·그림  
-└─ results/ # (gitignore 권장) CSV/로그 출력  
+└─ results/ # (gitignore 권장) CSV/로그 출력
+   ├─ smoke/              # 소규모 검증용 실험 결과
+   ├─ cota_tune/          # COTA 하이퍼파라미터 스윕 결과
+   └─ cota_verify/        # 최종 검증 실험 결과 (CSV/플롯)
 
 ---
 

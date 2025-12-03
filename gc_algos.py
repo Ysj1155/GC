@@ -1,5 +1,4 @@
-# gc_algos.py — safe & unified
-
+# gc_algos.py
 # ---------- 공통 헬퍼 ----------
 def _block_used(b):
     return int(getattr(b, "valid_count", 0)) + int(getattr(b, "invalid_count", 0))
@@ -18,7 +17,9 @@ def _wear(b):
 
 # ---------- 기본 정책들 ----------
 def greedy_policy(blocks):
-    """invalid 페이지가 가장 많은 블록을 victim으로"""
+    """
+    invalid 페이지가 가장 많은 블록을 victim으로
+    """
     best_idx, best_invalid = None, -1
     for i, b in enumerate(blocks):
         used = _block_used(b)
@@ -64,6 +65,34 @@ def bsgc_policy(blocks, alpha=0.7, beta=0.3):
         s = alpha * invalid_ratio + beta * (1.0 - wear_norm)
         if s > best_score:
             best_score, best_idx = s, i
+    return best_idx
+
+def age_stale_policy(blocks, K=50):
+    """
+    특허 'age & staleness' 기반 GC 정책 (단순화 버전)
+
+    rank(B) = staleness(B) * (age(B) + K)
+    - staleness ≈ invalid 페이지 수 (최소 1)
+    - age       = Block.age_counter (마지막 erase 이후 상대 나이)
+    """
+    best_idx, best_score = None, float("-inf")
+    for i, b in enumerate(blocks):
+        used = _block_used(b)
+        if used == 0:
+            # free block이면 건너뜀
+            continue
+
+        # staleness: invalid 페이지 수(특허 요약에서는 카운트/비율 둘 다 허용)
+        staleness = getattr(b, "invalid_count", 0)
+        if staleness < 1:
+            staleness = 1  # 새로 할당된 블록도 최소 기여
+
+        age = getattr(b, "age_counter", 0)
+        score = staleness * (age + K)
+
+        if score > best_score:
+            best_score, best_idx = score, i
+
     return best_idx
 
 # ---------- COTA (Cost-over-Temperature-and-Age) ----------
@@ -165,6 +194,7 @@ def get_gc_policy(name: str):
     if n in ("cb", "cost_benefit"): return cb_policy
     if n == "bsgc":    return bsgc_policy
     if n == "cota":     return cota_policy
+    if n == "age_stale": return age_stale_policy
     if n in ("atcb", "atcb_policy"):
         # 하이퍼파라/now_step은 run_sim.py에서 partial/래핑으로 주입 가능
         return lambda blocks: atcb_policy(blocks)

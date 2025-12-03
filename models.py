@@ -30,6 +30,10 @@ class Block:
         # timestamps for age/staleness-style policies
         self.last_invalid_step = 0
         self.last_prog_step = 0
+        self.inv_ewma = 0.0
+
+        # 특허식용 age (마지막 erase 이후 상대 나이)
+        self.age_counter = 0
 
         # lightweight block temperature (invalid-event EWMA)
         self.inv_ewma = 0.0
@@ -56,6 +60,20 @@ class Block:
     def last_activity(self) -> int:
         """최근 활동 시각(프로그래밍/무효화 두 축 중 더 최신)"""
         return max(int(self.last_prog_step), int(self.last_invalid_step))
+
+    def erase(self) -> None:
+        self.pages = [PageState.FREE] * self.pages_per_block
+        self.invalid_count = 0
+        self.valid_count = 0
+        self.erase_count += 1
+
+        self.last_invalid_step = 0
+        self.last_prog_step = 0
+        self.inv_ewma = 0.0
+        self.trimmed_pages = 0
+
+        # 새로 지운 블록은 age 0으로 초기화
+        self.age_counter = 0
 
     # -------- low-level ops --------
     def allocate_free_page(self) -> Optional[int]:
@@ -379,6 +397,18 @@ class SSD:
             **({"score_detail": probe_detail} if probe_detail is not None else {}),
         }
         self.gc_event_log.append(ev)
+
+    def erase_block(self, block_idx: int) -> None:
+        # 이 블록을 지우기 전에, "데이터를 들고 있는 나머지 블록" age 증가
+        for i, b in enumerate(self.blocks):
+            if i == block_idx:
+                continue
+            used = b.valid_count + b.invalid_count
+            if used > 0:
+                b.age_counter += 1
+
+        # 실제 erase 수행
+        self.blocks[block_idx].erase()
 
     # ---------- hotness / stream helpers ----------
     def _is_hot_lpn(self, lpn: int) -> bool:

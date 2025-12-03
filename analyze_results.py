@@ -124,17 +124,24 @@ def plot_waf_vs_update_ratio(df: pd.DataFrame, out_path: str):
 
 def plot_wear_hist(df: pd.DataFrame, out_path: str):
     _ensure_out_dir(out_path)
-    cols = [c for c in df.columns if c.startswith("wear_")]
-    need = {"wear_min","wear_avg","wear_max"}
-    if not need.issubset(set(cols)):
-        print("[plot] 필요한 컬럼이 없습니다(wear_min/wear_avg/wear_max)")
+
+    col_policy = "policy"
+    col_wear   = "wear_avg"
+
+    # 필요 컬럼 체크
+    if col_policy not in df.columns or col_wear not in df.columns:
+        print("[plot] 필요한 컬럼이 없습니다(policy, wear_avg)")
         return
-    # 평균 wear의 히스토그램
+
+    # 정책별 wear_avg 리스트 만들기
+    order = sorted(df[col_policy].dropna().unique())
+    data = [df[df[col_policy] == p][col_wear].astype(float) for p in order]
+
+    # 박스플롯: 정책별 평균 마모도 분포
     plt.figure()
-    plt.hist(df["wear_avg"].astype(float), bins=30, alpha=0.8)
-    plt.xlabel("wear_avg")
-    plt.ylabel("count")
-    plt.title("Wear Average Distribution")
+    plt.boxplot(data, tick_labels=order, showmeans=True)
+    plt.title("Wear Average by Policy")
+    plt.ylabel("wear_avg")
     plt.grid(True, linestyle=":", alpha=0.5)
     plt.tight_layout()
     plt.savefig(out_path)
@@ -194,6 +201,13 @@ def main():
 
     df = _read_csvs(csvs)
 
+    # ---- 논문용 메인 실험 필터 ----
+    # ops=200000 이고, 비정상적으로 낮은 WAF(run-in/특수 실험)를 제외한 subset만 사용
+    # (WAF > 10 조건은 ops=80k 및 WAF≈5 실험들을 모두 제거해 줌)
+    mask_main = (df.get("ops") == 200000) & (df.get("waf") > 10)
+    df_main = df[mask_main].copy()
+    print(f"[analyze_results] main_experiment rows: {len(df_main)}/{len(df)} (ops==200000 & waf>10)")
+
     # 병합 CSV 저장
     if args.out_csv:
         os.makedirs(os.path.dirname(args.out_csv) or ".", exist_ok=True)
@@ -203,10 +217,13 @@ def main():
     # 플롯
     if args.plots_dir:
         os.makedirs(args.plots_dir, exist_ok=True)
-        plot_waf_by_policy(df, os.path.join(args.plots_dir, "waf_by_policy.png"))
+        # 메인 실험 subset(df_main)을 사용해 WAF 박스플롯 생성
+        plot_waf_by_policy(df_main, os.path.join(args.plots_dir, "waf_by_policy.png"))
+        # 아래 세 개는 QC용이므로 전체 df를 그대로 사용
         plot_gc_vs_ops(df, os.path.join(args.plots_dir, "gc_vs_ops.png"))
         plot_waf_vs_update_ratio(df, os.path.join(args.plots_dir, "waf_vs_update_ratio.png"))
-        plot_wear_hist(df, os.path.join(args.plots_dir, "wear_avg_hist.png"))
+        # 메인 실험 subset(df_main)을 사용해 wear 히스토그램 생성
+        plot_wear_hist(df_main, os.path.join(args.plots_dir, "wear_avg_hist.png"))
         plot_trim_vs_policy(df, os.path.join(args.plots_dir, "trim_by_policy.png"))
         plot_stability(df, os.path.join(args.plots_dir, "stability_scatter.png"))
         print(f"[analyze_results] plots saved to: {args.plots_dir}")
