@@ -1,0 +1,2 @@
+policy,waf_med,waf_p25,waf_p75,gc_med,gc_p25,gc_p75,wear_std_med,wear_max_med
+cota,40.951701,40.13266725,41.75937625,130548.5,130066.5,130880.0,8.801677,528.0
