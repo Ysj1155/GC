@@ -1,145 +1,195 @@
-# SSD Garbage Collection Simulator
+# SSD GC Policy Lab
 
-> 본 레포는 **COTA (Cost-Over-Temperature-and-Age)** 와 기존 정책(Greedy / CB / BSGC / ATCB / RE50315)을 **동일 조건**에서 비교하고,  
-> **WAF·마모 균등성·GC 오버헤드** 지표를 **CSV로 자동 적재**하는 실험 프레임워크입니다.
+페이지 단위 쓰기 / 블록 단위 소거라는 NAND 플래시의 제약 때문에, SSD는 **Garbage Collection(GC)** 없이는 계속 쓸 수 없다.  
+하지만 GC는 **쓰기 증폭(WAF)**, **성능 저하(추가 read/program/erase)**, **마모 편중(수명 단축)** 같은 트레이드오프를 만들게 된다.
 
----
+이 프로젝트는 **여러 GC victim 선택 정책**(Greedy / CB / BSGC / COTA / ATCB / RE50315 …)을 같은 조건에서 실행하고,  
+결과를 **summary.csv로 자동 누적**한 뒤, **병합/요약/플로팅까지 한 번에 재현 가능한 실험 루프**를 제공하는 작은 실험실입니다.
 
-## 개요
-SSD는 erase-before-write 특성 때문에 GC가 필수이며, GC는 **쓰기 증폭(WAF)**·**성능 저하**·**수명 단축**을 유발할 수 있습니다.  
-이 프로젝트는 다양한 GC 정책을 소프트웨어로 구현/실행하고, 워크로드 별 **정량 지표**를 수집하여 **정확하고 재현 가능한 비교**를 제공합니다.
-
-**핵심 제공물**
-- GC 정책 비교 프레임워크(COTA, Greedy, CB, BSGC, ATCB, RE50315)
-- 동일 워크로드에서 자동 **CSV 적재** (메타/지표 일관 스키마)
-- 재현성(고정 seed, 설정 스냅샷, 옵션으로 git 커밋 해시)
+## Context
+This project started as an undergraduate capstone/thesis project and was later polished into a reproducible mini-lab for GC policy experiments.
 
 ---
 
-## 연구 목적
-- **목표:** 기존 정책 대비 COTA가 다음을 달성하는지 평가  
-  1) **WAF 감소** (device_writes/host_writes)  
-  2) **마모 균등화** (wear_std, wear_max 감소)  
-  3) **GC 오버헤드 감소** (gc_count, gc_avg_s 감소)  
-- **판단 기준:** 동일 워크로드·동일 시드에서 통계치(중앙값/사분위) 비교
+## 이 레포에서 할 수 있는 것
+
+- **단일 실험 실행** → `summary.csv`에 결과 1행 append (`run_sim.py`)
+- **그리드/시나리오(YAML)/멀티시드 반복**으로 실험 묶음 실행 (`experiments.py`, `sweep.py`)
+- 흩어진 `summary.csv`를 **자동 수집/병합** + 기본 플롯 생성 (`analyze_results.py`)
+- 정책별 대표값(중앙값/사분위)으로 **한 장 요약 테이블** 생성 (`summarize.py`)
+- 개념 그림(예: BSGC score heatmap) 같은 **설명용 플롯** 생성 (`plot_maker.py`)
 
 ---
 
-## 연구 질문 (RQs)
-- **RQ1.** Hot/Cold 편중, 업데이트 비율, OP(Over-Provisioning) 수준이 WAF/GC 빈도/마모 균형에 미치는 영향은?  
-- **RQ2.** Greedy/CB/BSGC/ATCB/RE50315의 강/약점은 무엇이며, 어떤 조건에서 역전이 발생하는가?  
-- **RQ3.** hotness·invalid·age·wear를 함께 고려한 **경량 점수식(COTA)** 은 기존 대비 성능/내구성을 개선하는가?  
-- **RQ4.** TRIM/OP/백그라운드-GC 조합은 WAF와 wear-leveling을 어떻게 바꾸는가?
+## 설치
 
----
+권장: Python 3.10+
 
-## 접근 방식
-- **시뮬레이터:** 페이지/블록 모델, active-block, reverse map, per-GC 이벤트 로그  
-- **워크로드:** update_ratio / hot_ratio / trim / OP(user_capacity_ratio) 스윕  
-- **지표:** WAF, GC count/avg_s, wear_avg/std/min/max, free_pages 타임라인, trimmed_pages  
-- **결과:** 실험별 CSV 자동 누적(메타 포함), 분석 스크립트로 요약/그림화
+필수 패키지:
+- pandas (CSV 읽기/요약)
+- matplotlib (플롯 생성)
 
----
+선택:
+- pyyaml (YAML 시나리오 실행 시)
 
-## 레포 구조 & 파일 역할
-├─ config.py # SimConfig (장치/실험 파라미터)  
-├─ simulator.py # SSD/Block/Page 모델, GC 실행 엔진, trace/event 로그  
-├─ workload.py # 워크로드 생성 (update/hot/trim 비율)  
-├─ gc_algos.py # GC 정책 (COTA/Greedy/CB/BSGC/ATCB/RE50315)  
-├─ run_sim.py # 단일 실행 → CSV append (메타 포함)  
-├─ experiments.py # grid/YAML/multiseed 스윕 실행  
-├─ sweep.py # 간단 스윕 + 완료 메시지 출력  
-├─ metrics.py # 요약/헤더 병합 CSV 유틸  
-├─ analyze_results.py # (옵션) 결과 병합·요약·그림  
-└─ results/ # (gitignore 권장) CSV/로그 출력
-   ├─ smoke/              # 소규모 검증용 실험 결과
-   ├─ cota_tune/          # COTA 하이퍼파라미터 스윕 결과
-   └─ cota_verify/        # 최종 검증 실험 결과 (CSV/플롯)
-
----
-
-## 데이터 생성 (명령어)
-**스모크(동일 파일에 누적)**  
-### Greedy
-```
-python run_sim.py --gc_policy greedy --ops 50000 \
-  --out_dir results/smoke --out_csv results/smoke/summary.csv --note smoke
-```
-### COTA (가중치는 옵션)
-```
-python run_sim.py --gc_policy cota --ops 50000 \
-  --cota_alpha 0.55 --cota_beta 0.25 --cota_gamma 0.15 --cota_delta 0.05 \
-  --out_dir results/smoke --out_csv results/smoke/summary.csv --note smoke
-```
----
-
-## 기대 산출물
-- 재현 가능한 **실험 스크립트 & CSV/플롯**, 
-- **개선 알고리즘(점수식/의사코드/실험결과)**,
-
----
-
-## ▶️ 데이터 생성 (명령어)
-
-**스모크(동일 파일에 누적)**
 ```bash
-# Greedy
-python run_sim.py --gc_policy greedy --ops 50000 \
-  --out_dir results/smoke --out_csv results/smoke/summary.csv --note smoke
-
-# COTA (가중치는 옵션)
-python run_sim.py --gc_policy cota --ops 50000 \
-  --cota_alpha 0.55 --cota_beta 0.25 --cota_gamma 0.15 --cota_delta 0.05 \
-  --out_dir results/smoke --out_csv results/smoke/summary.csv --note smoke
+pip install pandas matplotlib
+# YAML 시나리오까지 쓸 거면
+pip install pyyaml
 ```
 
 ---
 
-## CSV 스키마(요약)
+## Quickstart
 
-### 공통 메타
-policy, ops, seed, update_ratio, hot_ratio, hot_weight, trim_enabled, trim_ratio, warmup_fill, bg_gc_every, ts
+### 1) 단일 실행 (summary.csv append)
 
-### 성능/내구 지표
-waf, device_writes, host_writes, gc_count, gc_avg_s, free_blocks, free_pages, valid_pages, invalid_pages, wear_avg, wear_std, wear_min, wear_max, trimmed_pages, transition_rate, reheat_rate
+```bash
+python run_sim.py ^
+  --gc_policy cota ^
+  --ops 200000 --seed 42 ^
+  --out_dir results/run ^
+  --out_csv summary.csv
+```
 
-### COTA 메타
-cota_alpha, cota_beta, cota_gamma, cota_delta, cold_victim_bias, trim_age_bonus, victim_prefetch_k
+- `results/run/summary.csv`에 1행이 추가됩니다.
+- `--qc warn|strict`로 기본 무결성 체크(WAF/페이지 합/wear 범위 등)를 같이 돌릴 수 있습니다.
 
-#### metrics.append_summary_csv()가 헤더 병합을 자동 처리하므로, 새 컬럼이 생겨도 기존 CSV에 안전하게 append됩니다.
+### 2) Sweep / Grid 실행 (여러 조합 자동)
+
+```bash
+python sweep.py ^
+  --out_dir results/sweep ^
+  --out_csv results/sweep/summary.csv ^
+  --grid "gc_policy=greedy,cota,bsgc; update_ratio=0.5,0.8; seed=1,2" ^
+  --repeat 1
+```
+
+- `grid`는 `키=값1,값2; 키2=...` 형태로 데카르트 곱을 생성합니다.
+
+### 3) 결과 병합 + 기본 플롯 생성
+
+```bash
+python analyze_results.py ^
+  --base results --merge-subdirs ^
+  --out_csv results/_merged.csv ^
+  --plots_dir results/_plots
+```
+
+- `results/` 하위의 모든 `summary.csv`를 찾아 병합합니다.
+- 병합본에는 각 row의 출처를 추적하기 위해 `__source__` 컬럼이 추가됩니다.
+- `results/_plots/`에 기본 플롯 PNG가 생성됩니다.
+
+### 4) 정책별 요약(중앙값/사분위)
+
+```bash
+python summarize.py results/_merged.csv
+```
+
+- `results/comp/summary_by_policy.csv` 같은 형태로 요약 테이블을 생성합니다(스크립트 내부 경로 확인).
 
 ---
 
-## 참고 문헌
-- SSD 가비지 컬렉션을 고려한 IO 스케줄러의 대역폭 분배 기법.pdf
-- 플래시 저장장치의 garbage collection 스케줄링.pdf
-- 머신러닝 알고리즘을 통한 SSD 가비지 컬렉션 감지 및 관리 기법.pdf
-- 고성능 SSD를 위한 펌웨어 설계.pdf
-- RocksDB SSTable 크기가 성능에 미치는 영향 분석.pdf
-- SSD 기반 저장장치 시스템에서 마모도 균형과 내구성 향상을 위한 가비지 컬렉션 기법.pdf
-- analysis of the K2 scheduler for a real-time system with a SSD.pdf
-- Design and Implementation of Temperature-Aware Garbage collectors.pdf
-- GC 특허.pdf
+## 재현성
+
+이 프로젝트에서 재현성은 누가 돌려도 같은 입력이면 같은 출력이 나온다를 목표로 합니다.
+
+- **시드 고정:** `--seed`, `rng_seed`
+- **장치/워크로드 조건:** `blocks`, `pages_per_block`, `user_capacity_ratio`, `update_ratio`, `hot_ratio`, `trim_ratio` …
+- **정책 하이퍼파라미터:** COTA(α/β/γ/δ), cold bias, top-k …
+- **결과 로그:** `summary.csv`에 메타+메트릭을 한 줄로 누적  
+- **출처 추적:** 병합 시 `__source__`로 이 row가 어디서 나왔는지를 따라갈 수 있음
 
 ---
 
-## 실험 결과
+## 주요 스크립트/모듈 안내
 
-- 표 1. 동일 조건에서 Greedy vs COTA의 WAF 중앙값(±IQR) 비교  
-- 그림 1. Wear 표준편차(wear_std) 비교(낮을수록 균등)  
-- 그림 2. GC 오버헤드(gc_count / gc_avg_s) 비교  
-- 부록 A. TRIM/OP/업데이트 비율에 대한 민감도 결과  
+### 실행(실험 생성)
+- `run_sim.py`  
+  단일 실행용 CLI. 실험 1회 실행 후 `summary.csv`에 append.
+- `experiments.py`  
+  그리드/시나리오(YAML)/멀티시드 반복을 포함한 “실험 러너”.
+- `sweep.py`  
+  `experiments.py`를 감싸는 얇은 wrapper(빠른 sweep 용도).
 
---- 
+### 분석/시각화(결과 소비)
+- `analyze_results.py`  
+  흩어진 summary를 모아서 병합 + 기본 플롯 생성.
+- `summarize.py`  
+  병합된 CSV를 정책별 대표 통계로 축약.
+- `plot_maker.py`  
+  개념 설명용 플롯(예: BSGC score heatmap).
 
-## 앞으로의 계획
+### 핵심 로직
+- `config.py`  
+  실험 입력(geometry / GC trigger / latency)을 한 곳에 모아 검증 + 파생값 계산.
+- `models.py`  
+  페이지 상태(FREE/VALID/INVALID) + 블록/SSD 동작(쓰기/GC/trim) 모델.
+- `gc_algos.py`  
+  victim 선택 정책 모음. 함수형 정책 `policy(blocks) -> victim_idx`.
+- `workload.py`  
+  워크로드 생성기(신규 write/업데이트, hot/cold, 선택적 TRIM).
+- `simulator.py`  
+  워크로드를 SSD 모델에 흘려보내는 실행 엔진(+ 옵션으로 BG-GC/trace).
+- `metrics.py`  
+  시뮬레이터/SSD 구현 차이를 흡수하면서 메트릭을 견고하게 추출하고 CSV로 저장.
 
-- 데이터 적재 확대: 시드/워크로드 스윕 누적
+---
 
-- 분석 자동화: analyze_results.py로 정책별 통계/그림 일괄 생성
+## 결과 CSV 스키마(요약)
 
-- Ablation & 민감도: COTA 가중치/trim_age_bonus/top-K 영향 분해
+`metrics.py`가 기본적으로 채우는 대표 컬럼들:
 
-- 문서화: 결과 표/그림 고정, 논문 본문에 인용 가능한 수치 정리
+- `host_writes`, `device_writes`, `waf`
+- `gc_count`, `gc_avg_s`
+- `free_pages`, `free_blocks`
+- `wear_min`, `wear_max`, `wear_avg`, `wear_std`
+- `valid_pages`, `invalid_pages`, `trimmed_pages`
+- (선택) `transition_rate`, `reheat_rate` (분포 기반의 보수적 스냅샷 신호)
 
---- 
+여기에 `run_sim.py / experiments.py`가 넣는 메타(예: `ops`, `seed`, `update_ratio`, `cota_alpha` …)가 합쳐져서 한 행을 구성합니다.
+
+---
+
+## 확장하는 법 (새 정책/새 메트릭)
+
+### 새 GC 정책 추가
+1) `gc_algos.py`에 함수 추가  
+   - 입력: `blocks` (Block 리스트)  
+   - 출력: victim index(int) 또는 None
+2) `get_gc_policy()`에 이름 등록
+3) `run_sim.py` / `experiments.py`의 `--gc_policy` choices에 이름 추가(원하면)
+
+### 새 메트릭 추가
+- `metrics.py::collect_run_metrics()`에 키를 추가하면 됩니다.  
+- `append_summary_csv()`는 **기존 헤더 + 새 컬럼 자동 추가** 방식이라, 실험 중간에 컬럼이 늘어나도 데이터가 유지됩니다.
+
+---
+
+## 모델링 가정 / 한계
+
+이 레포는 실험 비교가 가능한 단순 모델을 목표로 합니다.
+
+- 지연시간(latency)은 μs 단위의 **상수 비용 모델**(실SSD의 병렬성/큐잉/채널 구조는 생략)
+- FTL은 페이지 매핑 기반의 **단순화된 out-of-place 업데이트**(세부 최적화 생략)
+- wear는 erase count를 기반으로 한 **거친 수명 지표**
+- 실제 장치 수준의 절대 성능 예측이 아니라, **정책 간 상대 비교/경향 관찰**에 초점을 둡니다.
+
+---
+
+## 추천 실험 레시피
+
+- 정책 비교 기본:  
+  `ops=200k`, `update_ratio=0.8`, `hot_ratio=0.2`, `seed=1..N` (N>=3 권장)
+- steady-state 비교:  
+  `--warmup_fill 0.7~0.9`로 선행 채우기 후 본 실험 실행
+- TRIM 영향:  
+  `--enable_trim --trim_ratio 0.05~0.2`로 삭제 이벤트 추가
+
+
+---
+
+## 한 줄 요약
+
+> **GC 정책을 바꿔가며** 같은 워크로드를 흘리고,  
+> 결과를 **CSV로 쌓고**, **병합/요약/플롯까지 재현 가능하게** 만드는 GC 실험용 미니 랩.
