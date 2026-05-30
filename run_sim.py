@@ -76,6 +76,7 @@ from config import SimConfig
 from simulator import Simulator
 from workload import make_workload
 from metrics import append_summary_csv, summary_row
+from manifest import build_run_manifest, write_manifest
 import gc_algos
 
 
@@ -398,6 +399,7 @@ def main():
     ap.add_argument("--out_csv", type=str, default=None, help="요약 CSV append 경로 (권장: summary.csv)")
     ap.add_argument("--trace_csv", type=str, default=None, help="옵션: trace CSV (시뮬레이터가 지원 시)")
     ap.add_argument("--gc_events_csv", type=str, default=None, help="per-GC 이벤트 로그 CSV (실행 후 저장)")
+    ap.add_argument("--manifest_json", type=str, default=None, help="옵션: 재현성 manifest JSON 저장 경로")
     ap.add_argument("--note", type=str, default="", help="메모/주석")
     ap.add_argument(
         "--qc", type=str, default="warn", choices=["off", "warn", "strict"],
@@ -414,6 +416,7 @@ def main():
     out_csv_path       = _resolve_path(args.out_csv, out_dir) if args.out_csv else None
     trace_csv_path     = _resolve_path(args.trace_csv, out_dir) if args.trace_csv else None
     gc_events_csv_path = _resolve_path(args.gc_events_csv, out_dir) if args.gc_events_csv else None
+    manifest_json_path = _resolve_path(args.manifest_json, out_dir) if args.manifest_json else None
 
     # --------------------------------------------------------
     # Config + Simulator 생성
@@ -483,35 +486,35 @@ def main():
     # --------------------------------------------------------
     # 결과 저장 (가능한 것만)
     # --------------------------------------------------------
+    meta = {
+        # 재현성 핵심: 이 row가 어떤 커맨드 조건이었는지
+        "run_id": args.note or f"{args.gc_policy}_{args.seed}",
+        "policy": args.gc_policy,
+        "ops": args.ops,
+        "update_ratio": args.update_ratio,
+        "hot_ratio": args.hot_ratio,
+        "hot_weight": args.hot_weight,
+        "seed": args.seed,
+        "trim_enabled": 1 if args.enable_trim else 0,
+        "trim_ratio": args.trim_ratio,
+        "warmup_fill": args.warmup_fill,
+        "bg_gc_every": args.bg_gc_every,
+        "note": args.note,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+
+        # COTA 계열 메타
+        "cota_alpha": getattr(args, "cota_alpha", None),
+        "cota_beta": getattr(args, "cota_beta", None),
+        "cota_gamma": getattr(args, "cota_gamma", None),
+        "cota_delta": getattr(args, "cota_delta", None),
+        "cold_victim_bias": getattr(args, "cold_victim_bias", 1.0),
+        "trim_age_bonus": getattr(args, "trim_age_bonus", 0.0),
+        "victim_prefetch_k": getattr(args, "victim_prefetch_k", 1),
+    }
+    row = summary_row(sim, meta)
+
     if out_csv_path:
-        meta = {
-            # 재현성 핵심: 이 row가 어떤 커맨드 조건이었는지
-            "run_id": args.note or f"{args.gc_policy}_{args.seed}",
-            "policy": args.gc_policy,
-            "ops": args.ops,
-            "update_ratio": args.update_ratio,
-            "hot_ratio": args.hot_ratio,
-            "hot_weight": args.hot_weight,
-            "seed": args.seed,
-            "trim_enabled": 1 if args.enable_trim else 0,
-            "trim_ratio": args.trim_ratio,
-            "warmup_fill": args.warmup_fill,
-            "bg_gc_every": args.bg_gc_every,
-            "note": args.note,
-            "ts": datetime.now().isoformat(timespec="seconds"),
-
-            # COTA 계열 메타
-            "cota_alpha": getattr(args, "cota_alpha", None),
-            "cota_beta": getattr(args, "cota_beta", None),
-            "cota_gamma": getattr(args, "cota_gamma", None),
-            "cota_delta": getattr(args, "cota_delta", None),
-            "cold_victim_bias": getattr(args, "cold_victim_bias", 1.0),
-            "trim_age_bonus": getattr(args, "trim_age_bonus", 0.0),
-            "victim_prefetch_k": getattr(args, "victim_prefetch_k", 1),
-        }
-
         # QC는 summary_row를 대상으로 수행(저장될 행을 검사)
-        row = summary_row(sim, meta)
         if args.qc != "off":
             ok = _quick_qc(row)
             if args.qc == "strict" and not ok:
@@ -543,6 +546,23 @@ def main():
             w.writeheader()
             for ev in sim.ssd.gc_event_log:
                 w.writerow(ev)
+
+    if manifest_json_path:
+        artifacts = {
+            "summary_csv": out_csv_path,
+            "trace_csv": trace_csv_path,
+            "gc_events_csv": gc_events_csv_path,
+            "manifest_json": manifest_json_path,
+        }
+        manifest = build_run_manifest(
+            args=args,
+            metrics_row=row,
+            out_dir=out_dir,
+            artifacts=artifacts,
+            cwd=os.getcwd(),
+        )
+        write_manifest(manifest_json_path, manifest)
+        print(f"[RUN DONE] manifest JSON 저장 → {manifest_json_path}")
 
 
 if __name__ == "__main__":

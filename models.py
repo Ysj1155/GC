@@ -527,7 +527,29 @@ class SSD:
 
         # 2) all-invalid면 즉시 erase(목적지 불필요)
         if victim.valid_count == 0 and victim.invalid_count > 0:
+            t0 = time.perf_counter()
+            v_invalid = victim.invalid_count
+            v_ewma = victim.inv_ewma
+            v_erase = victim.erase_count
             self.erase_block(victim_idx)
+            self.gc_count += 1
+
+            dt = time.perf_counter() - t0
+            self.gc_total_time += dt
+            self.gc_durations.append(dt)
+            self.gc_event_log.append({
+                "step": self._step,
+                "cause": cause,
+                "victim": victim_idx,
+                "moved_valid": 0,
+                "freed_pages": v_invalid,
+                "gc_s": dt,
+                "free_blocks_after": self.free_blocks,
+                "v_valid": 0,
+                "v_invalid": v_invalid,
+                "v_inv_ewma": v_ewma,
+                "v_erase": v_erase,
+            })
             return
 
         # 3) 목적지 블록 선확보
