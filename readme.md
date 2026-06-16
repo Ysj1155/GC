@@ -12,6 +12,7 @@ This repository started as an undergraduate SSD garbage-collection research proj
 - Core validation metrics such as WAF, GC count, free-space state, wear_avg, wear_std, and wear_max
 - CLI-based experiment automation with CSV summaries and analysis scripts
 - A growing pytest-based validation suite for FTL/GC invariants
+- A compact portfolio evidence note showing condition -> execution -> WAF / wear results -> interpretation
 
 ## Portfolio Positioning
 
@@ -22,6 +23,10 @@ For SSD controller / NAND / storage validation roles, this project is intended t
 - Test-engineering thinking: invariants, sanity checks, reproducibility, stress workloads, and failure-oriented debugging
 - Clear separation between model assumptions and real-device behavior
 
+Portfolio evidence example:
+
+- [GC Policy Validation Evidence](docs/portfolio_gc_evidence.md)
+
 ## Repository Layout
 
 ```text
@@ -30,13 +35,18 @@ For SSD controller / NAND / storage validation roles, this project is intended t
 ├── models.py                 # Page, block, and SSD state model
 ├── simulator.py              # Workload execution and GC trigger orchestration
 ├── gc_algos.py               # GC victim-selection policies
+├── policy_factory.py          # CLI/experiment policy wiring and parameter binding
+├── experiment_runner.py       # Shared one-run execution, warmup, output, and QC helpers
 ├── workload.py               # Random update / hot-cold / TRIM workload generation
 ├── metrics.py                # Run metrics and summary CSV writing
 ├── run_sim.py                # Single-run CLI entry point
 ├── experiments.py            # Grid / scenario experiment runner
+├── validation_matrix.py       # Portfolio-oriented stress/endurance matrix runner
+├── validation_report.py       # Markdown/CSV validation report generator
 ├── analyze_results.py        # CSV merge and plotting helper
 ├── summarize.py              # Policy-level summary helper
 ├── docs/
+│   ├── portfolio_gc_evidence.md # Condition -> execution -> result -> interpretation example
 │   └── test_plan.md          # Validation-oriented test plan
 └── tests/                    # Pytest validation suite
 ```
