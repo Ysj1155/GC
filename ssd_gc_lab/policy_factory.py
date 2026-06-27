@@ -16,7 +16,7 @@ validation tools from each carrying their own slightly different policy wrapper.
 
 from typing import Any, Callable, List, Optional
 
-import gc_algos
+from ssd_gc_lab import gc_algos
 
 
 def _arg(args: Any, name: str, default: Any = None) -> Any:

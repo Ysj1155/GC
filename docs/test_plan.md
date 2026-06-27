@@ -78,8 +78,8 @@ These tests are planned as portfolio validation scenarios.
 The quick matrix is intended for local smoke validation. The full matrix is intended for final portfolio artifacts:
 
 ```bash
-python validation_matrix.py --profile quick --policies greedy,cota --seeds 41 --dry_run
-python validation_matrix.py --profile full --policies greedy,cb,bsgc,cota --out_dir results/final_clean
+python tools/validation_matrix.py --profile quick --policies greedy,cota --seeds 41 --dry_run
+python tools/validation_matrix.py --profile full --policies greedy,cb,bsgc,cota --out_dir results/final_clean
 ```
 
 ## Pass / Fail Signals
@@ -113,7 +113,7 @@ For final portfolio results, prefer one clean output directory per scenario, suc
 After running the validation matrix, generate a reviewable report:
 
 ```bash
-python validation_report.py --base_dir results/final_clean
+python tools/validation_report.py --base_dir results/final_clean
 ```
 
 Expected outputs:

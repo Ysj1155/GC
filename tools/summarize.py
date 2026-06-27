@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 """
 summarize.py
 
@@ -39,7 +47,6 @@ run_sim.py / experiments.py는 실행을 돌리면서 summary.csv에 계속 appe
 -------------------
 """
 
-from __future__ import annotations
 
 import sys
 import pandas as pd

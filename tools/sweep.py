@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 """
 sweep.py
 
@@ -52,21 +60,20 @@ sweep.py는 그 용도를 깔끔하게 포장한 thin wrapper다.
 사용 예시
 ---------
 1) grid sweep:
-   python sweep.py --grid "gc_policy=greedy,cota; seed=41,42; update_ratio=0.8" --repeat 1
+   python tools/sweep.py --grid "gc_policy=greedy,cota; seed=41,42; update_ratio=0.8" --repeat 1
 
 2) YAML scenario:
-   python sweep.py --scenarios scenarios.yaml
+   python tools/sweep.py --scenarios configs/scenarios.yaml
 
 """
 
-from __future__ import annotations
 
 import argparse
 import os
 from typing import Any, Dict, List, Tuple
 
 # experiments 모듈의 빌딩 블록을 그대로 재사용
-from experiments import (
+from tools.experiments import (
     build_grid,
     load_scenarios,
     run_once,

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import os
@@ -115,7 +121,7 @@ def build_run_command(
     run_dir = os.path.join(out_root, scenario.name, f"{policy}_seed{seed}")
     cmd = [
         python_executable or sys.executable,
-        "run_sim.py",
+        os.path.join(os.path.dirname(__file__), "run_sim.py"),
         "--gc_policy",
         policy,
         "--seed",

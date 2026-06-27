@@ -1,6 +1,6 @@
 import json
 
-from validation_report import generate_report, load_run_rows, summarize_rows
+from tools.validation_report import generate_report, load_run_rows, summarize_rows
 
 
 def _write_manifest(path, scenario, policy, seed, waf, wear_std):

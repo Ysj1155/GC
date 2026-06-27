@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 """
 run_sim.py
 
@@ -39,10 +45,10 @@ PowerShell에서는 bash처럼 줄 끝에 '\' 쓰면 에러가 난다.
 대신 아래 중 하나를 써야 한다.
 
 (1) 한 줄로 쓰기:
-    python run_sim.py --gc_policy cota --ops 200000 --out_dir results/smoke --out_csv results/smoke/summary.csv --trace_csv results/smoke/trace.csv
+    python tools/run_sim.py --gc_policy cota --ops 200000 --out_dir results/smoke --out_csv results/smoke/summary.csv --trace_csv results/smoke/trace.csv
 
 (2) PowerShell 줄바꿈은 백틱(`) 사용:
-    python run_sim.py `
+    python tools/run_sim.py `
       --gc_policy cota `
       --ops 200000 `
       --out_dir results/smoke `
@@ -61,7 +67,7 @@ PowerShell에서는 bash처럼 줄 끝에 '\' 쓰면 에러가 난다.
 import os
 import argparse
 
-from experiment_runner import (
+from ssd_gc_lab.experiment_runner import (
     ensure_dir,
     quick_qc,
     resolve_output_path,
@@ -69,8 +75,8 @@ from experiment_runner import (
     write_gc_events_csv,
     write_trace_csv,
 )
-from metrics import append_summary_csv
-from manifest import build_run_manifest, write_manifest
+from ssd_gc_lab.metrics import append_summary_csv
+from ssd_gc_lab.manifest import build_run_manifest, write_manifest
 
 
 # ============================================================
@@ -108,12 +114,21 @@ def main():
     # --------------------------------------------------------
     # 정책 선택 & 파라미터
     # --------------------------------------------------------
+    ap.add_argument("--burst_length", type=int, default=0, help="update-heavy burst length in operations")
+    ap.add_argument("--burst_ratio", type=float, default=0.0, help="probability of starting a burst at each operation")
+    ap.add_argument("--phase_pattern", type=str, default="steady", choices=["steady", "bulk_update_trim", "phased", "rocksdb_like"], help="workload phase pattern")
+    ap.add_argument("--trim_locality", type=str, default="mixed", choices=["mixed", "hot", "cold"], help="TRIM target locality")
+    ap.add_argument("--trim_burst_length", type=int, default=0, help="length of periodic TRIM-heavy windows")
+    ap.add_argument("--trim_burst_interval", type=int, default=0, help="period between TRIM-heavy windows")
+
+    # --------------------------------------------------------
+    # GC policy selection and policy parameters
+    # --------------------------------------------------------
     ap.add_argument(
         "--gc_policy", type=str, default="greedy",
         choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"],
-        help="GC 정책 선택"
+        help="GC policy"
     )
-
     # COTA 파라미터
     ap.add_argument("--cota_alpha", type=float, default=None, help="COTA α (invalid)")
     ap.add_argument("--cota_beta",  type=float, default=None, help="COTA β (1-hot)")

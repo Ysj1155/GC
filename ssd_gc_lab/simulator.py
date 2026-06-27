@@ -75,7 +75,7 @@ import time
 
 try:
     # 프로젝트 모델: SSD 이름으로 정의되어 있음
-    from models import SSD as Device, Block, PageState
+    from ssd_gc_lab.models import SSD as Device, Block, PageState
 except Exception:
     # 타입 안전을 위해 최소 더미 제공(의존성 깨진 환경에서도 import는 되게)
     Device = object  # type: ignore
@@ -89,7 +89,7 @@ except Exception:
 
 try:
     # 정책 팩토리: get_gc_policy(name) -> policy(blocks)->victim_idx
-    from gc_algos import get_gc_policy
+    from ssd_gc_lab.gc_algos import get_gc_policy
 except Exception:
     # 최후방어: invalid_count가 최대인 블록 선택 (greedy 비슷한 형태)
     def get_gc_policy(name: str) -> Callable[[List[Any]], Optional[int]]:

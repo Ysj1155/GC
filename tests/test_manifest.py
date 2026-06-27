@@ -1,6 +1,6 @@
 from argparse import Namespace
 
-from manifest import build_run_manifest
+from ssd_gc_lab.manifest import build_run_manifest
 
 
 def test_build_run_manifest_contains_reproducibility_fields(tmp_path) -> None:

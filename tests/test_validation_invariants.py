@@ -1,9 +1,9 @@
-from config import SimConfig
-from gc_algos import cota_policy, greedy_policy
-from metrics import collect_run_metrics
-from models import PageState, SSD
-from simulator import Simulator
-from workload import make_workload
+from ssd_gc_lab.config import SimConfig
+from ssd_gc_lab.gc_algos import cota_policy, greedy_policy
+from ssd_gc_lab.metrics import collect_run_metrics
+from ssd_gc_lab.models import PageState, SSD
+from ssd_gc_lab.simulator import Simulator
+from ssd_gc_lab.workload import make_workload
 
 
 def assert_ssd_invariants(ssd: SSD) -> None:
@@ -149,3 +149,42 @@ def test_workload_generation_is_seed_reproducible() -> None:
     )
 
     assert first == second
+
+
+def test_workload_burst_phase_and_trim_controls_are_reproducible() -> None:
+    first = make_workload(
+        n_ops=120,
+        update_ratio=0.7,
+        ssd_total_pages=128,
+        rng_seed=123,
+        hot_ratio=0.25,
+        hot_weight=0.8,
+        enable_trim=True,
+        trim_ratio=0.05,
+        burst_length=8,
+        burst_ratio=0.10,
+        phase_pattern="bulk_update_trim",
+        trim_locality="hot",
+        trim_burst_length=4,
+        trim_burst_interval=20,
+    )
+    second = make_workload(
+        n_ops=120,
+        update_ratio=0.7,
+        ssd_total_pages=128,
+        rng_seed=123,
+        hot_ratio=0.25,
+        hot_weight=0.8,
+        enable_trim=True,
+        trim_ratio=0.05,
+        burst_length=8,
+        burst_ratio=0.10,
+        phase_pattern="bulk_update_trim",
+        trim_locality="hot",
+        trim_burst_length=4,
+        trim_burst_interval=20,
+    )
+
+    assert first == second
+    assert any(isinstance(op, tuple) and op[0] == "trim" for op in first)
+    assert any(isinstance(op, tuple) and op[0] == "write" for op in first)

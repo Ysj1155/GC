@@ -1,4 +1,4 @@
-from validation_matrix import build_run_command, get_scenarios, iter_run_commands
+from tools.validation_matrix import build_run_command, get_scenarios, iter_run_commands
 
 
 def test_get_scenarios_has_portfolio_stress_cases() -> None:
@@ -21,7 +21,9 @@ def test_build_run_command_includes_manifest_and_qc() -> None:
         python_executable="python",
     )
 
-    assert cmd[:4] == ["python", "run_sim.py", "--gc_policy", "greedy"]
+    assert cmd[0] == "python"
+    assert cmd[1].endswith("run_sim.py")
+    assert cmd[2:4] == ["--gc_policy", "greedy"]
     assert "--manifest_json" in cmd
     assert "manifest.json" in cmd
     assert "--qc" in cmd

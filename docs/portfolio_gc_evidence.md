@@ -49,7 +49,7 @@ Why this condition matters:
 The evidence run was produced with:
 
 ```powershell
-python experiments.py `
+python tools/experiments.py `
   --ops 20000 `
   --blocks 64 `
   --pages_per_block 32 `

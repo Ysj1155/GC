@@ -16,11 +16,11 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from config import SimConfig
-from metrics import append_summary_csv, summary_row
-from policy_factory import inject_policy
-from simulator import Simulator
-from workload import make_workload
+from ssd_gc_lab.config import SimConfig
+from ssd_gc_lab.metrics import append_summary_csv, summary_row
+from ssd_gc_lab.policy_factory import inject_policy
+from ssd_gc_lab.simulator import Simulator
+from ssd_gc_lab.workload import make_workload
 
 
 def ensure_dir(path: str) -> None:
@@ -114,6 +114,12 @@ def build_workload(args: Any, user_total_pages: int):
         hot_weight=args.hot_weight,
         enable_trim=args.enable_trim,
         trim_ratio=args.trim_ratio,
+        burst_length=getattr(args, "burst_length", 0),
+        burst_ratio=getattr(args, "burst_ratio", 0.0),
+        phase_pattern=getattr(args, "phase_pattern", "steady"),
+        trim_locality=getattr(args, "trim_locality", "mixed"),
+        trim_burst_length=getattr(args, "trim_burst_length", 0),
+        trim_burst_interval=getattr(args, "trim_burst_interval", 0),
     )
 
 
@@ -160,6 +166,12 @@ def build_run_meta(args: Any) -> Dict[str, Any]:
         "trim_ratio": getattr(args, "trim_ratio", 0.0),
         "warmup_fill": args.warmup_fill,
         "bg_gc_every": args.bg_gc_every,
+        "burst_length": getattr(args, "burst_length", 0),
+        "burst_ratio": getattr(args, "burst_ratio", 0.0),
+        "phase_pattern": getattr(args, "phase_pattern", "steady"),
+        "trim_locality": getattr(args, "trim_locality", "mixed"),
+        "trim_burst_length": getattr(args, "trim_burst_length", 0),
+        "trim_burst_interval": getattr(args, "trim_burst_interval", 0),
         "note": note,
         "ts": datetime.now().isoformat(timespec="seconds"),
         "cota_alpha": getattr(args, "cota_alpha", None),

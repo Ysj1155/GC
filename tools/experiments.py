@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 """
 experiments.py
 
@@ -57,7 +63,7 @@ Output:
 import argparse
 from typing import Any, Dict, List
 
-from experiment_runner import ensure_dir, run_once
+from ssd_gc_lab.experiment_runner import ensure_dir, run_once
 
 
 # ------------------------------------------------------------
@@ -209,6 +215,13 @@ def main() -> None:
     ap.add_argument("--enable_trim", action="store_true")
     ap.add_argument("--trim_ratio", type=float, default=0.0)
     ap.add_argument("--warmup_fill", type=float, default=0.0)
+    ap.add_argument("--burst_length", type=int, default=0, help="update-heavy burst length in operations")
+    ap.add_argument("--burst_ratio", type=float, default=0.0, help="probability of starting a burst at each operation")
+    ap.add_argument("--phase_pattern", type=str, default="steady", choices=["steady", "bulk_update_trim", "phased", "rocksdb_like"], help="workload phase pattern")
+    ap.add_argument("--trim_locality", type=str, default="mixed", choices=["mixed", "hot", "cold"], help="TRIM target locality")
+    ap.add_argument("--trim_burst_length", type=int, default=0, help="length of periodic TRIM-heavy windows")
+    ap.add_argument("--trim_burst_interval", type=int, default=0, help="period between TRIM-heavy windows")
+
 
     ap.add_argument(
         "--gc_policy",
