@@ -54,3 +54,6 @@ plots/
 # --------------------
 .idea/
 *.iml
+
+# Project uses README install commands instead of a pinned requirements file
+requirements.txt
