@@ -14,7 +14,7 @@ from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 
 
-KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "free_blocks"]
+KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_hits", "trim_misses", "retrim_count", "trim_invalidated_pages", "trimmed_pages"]
 
 
 def _read_json(path: str) -> Dict[str, Any]:
@@ -140,8 +140,13 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write(_markdown_table(summary, cols))
         f.write("\n")
 
+        f.write("## TRIM Summary\n\n")
+        trim_cols = ["scenario", "policy", "runs", "trim_ops_mean", "trim_hits_mean", "trim_misses_mean", "retrim_count_mean", "trim_invalidated_pages_mean"]
+        f.write(_markdown_table(summary, trim_cols))
+        f.write("\n")
+
         f.write("## Run Inventory\n\n")
-        inv_cols = ["scenario", "policy", "seed", "ops", "waf", "gc_count", "wear_std", "manifest"]
+        inv_cols = ["scenario", "policy", "seed", "ops", "waf", "gc_count", "wear_std", "trim_ops", "trim_hits", "trim_misses", "manifest"]
         f.write(_markdown_table(rows, inv_cols))
         f.write("\n")
 
@@ -149,6 +154,8 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write("- WAF should remain at or above 1.0 for host-write workloads.\n")
         f.write("- Lower `wear_std` indicates more even erase distribution in this simplified model.\n")
         f.write("- Each run manifest records command, parameters, git state, Python version, and final metrics.\n")
+        f.write("- TRIM invalidates logical mappings but should not increment host/device write counters.\n")
+        f.write("- TRIM-heavy rows should be interpreted together with GC and wear metrics.\n")
         f.write("- These numbers are simulator-relative validation signals, not real SSD performance claims.\n")
 
 

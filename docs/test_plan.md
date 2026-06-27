@@ -44,6 +44,8 @@ These tests check logical delete handling.
 - TRIM removes the LPN mapping
 - TRIM invalidates the previously mapped physical page
 - TRIM does not increment host or device writes
+- TRIM counters distinguish hits, misses, retrims, and invalidated pages
+- Per-TRIM event logs preserve mapping invalidation evidence
 - Repeated TRIM on an unmapped LPN is safe
 
 ### Garbage Collection Behavior
@@ -71,6 +73,7 @@ These tests are planned as portfolio validation scenarios.
 - High update ratio random write stress: `random_update_stress`
 - Hot/cold skew stress: included in update-heavy presets
 - TRIM burst stress: `trim_burst`
+- Delete-after-bulk-load TRIM lifecycle stress: `delete_after_bulk_load`
 - Low over-provisioning pressure: `low_op_pressure`
 - Multi-policy comparison under identical workload seeds: `validation_matrix.py`
 - Long-run endurance wear distribution: `endurance_short`
@@ -119,6 +122,7 @@ python tools/validation_report.py --base_dir results/final_clean
 Expected outputs:
 
 - `validation_report.md`
+- TRIM lifecycle evidence: `docs/trim_gc_validation_evidence.md`
 - `validation_summary.csv`
 - `validation_runs.csv`
 

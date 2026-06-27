@@ -278,6 +278,11 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
         "wear_std": round(wear_stat["std"], 6),
 
         "trimmed_pages": total_trimmed,
+        "trim_ops": int(_get(ssd, ["trim_ops"], 0)),
+        "trim_hits": int(_get(ssd, ["trim_hits"], 0)),
+        "trim_misses": int(_get(ssd, ["trim_misses"], 0)),
+        "retrim_count": int(_get(ssd, ["retrim_count"], 0)),
+        "trim_invalidated_pages": int(_get(ssd, ["trim_invalidated_pages"], total_trimmed)),
         "valid_pages": total_valid,
         "invalid_pages": total_invalid,
 

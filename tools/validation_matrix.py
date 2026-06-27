@@ -70,6 +70,24 @@ def get_scenarios(profile: str) -> List[MatrixScenario]:
             },
         ),
         MatrixScenario(
+            name="delete_after_bulk_load",
+            description="Bulk-load followed by TRIM-heavy cleanup pressure.",
+            params={
+                "ops": 20_000 * scale,
+                "update_ratio": 0.65,
+                "hot_ratio": 0.25,
+                "hot_weight": 0.8,
+                "enable_trim": True,
+                "trim_ratio": 0.05,
+                "trim_locality": "cold",
+                "trim_burst_length": 16,
+                "trim_burst_interval": 256,
+                "phase_pattern": "bulk_update_trim",
+                "user_capacity_ratio": 0.92,
+                "bg_gc_every": 192,
+                "warmup_fill": 0.65,
+            },
+        ),        MatrixScenario(
             name="low_op_pressure",
             description="Low over-provisioning pressure to force GC decisions.",
             params={

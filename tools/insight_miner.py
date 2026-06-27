@@ -15,9 +15,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from tools.validation_report import load_run_rows, write_csv
 
 
-LOWER_IS_BETTER = {"waf", "gc_count", "wear_std", "wear_max"}
-HIGHER_IS_BETTER = {"free_blocks"}
-KEY_METRICS = ["waf", "gc_count", "wear_std", "wear_max", "free_blocks"]
+LOWER_IS_BETTER = {"waf", "gc_count", "wear_std", "wear_max", "trim_misses", "retrim_count"}
+HIGHER_IS_BETTER = {"free_blocks", "trim_invalidated_pages"}
+KEY_METRICS = ["waf", "gc_count", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_misses", "retrim_count", "trim_invalidated_pages"]
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -245,6 +245,9 @@ def write_insights_markdown(
         f.write(_markdown_table(best_waf, ["scenario", "policy", "runs", "waf_mean", "wear_std_mean", "gc_count_mean"]))
         f.write("\n## Best Mean Wear Balance\n\n")
         f.write(_markdown_table(best_wear, ["scenario", "policy", "runs", "wear_std_mean", "waf_mean", "gc_count_mean"]))
+        f.write("\n## TRIM Activity\n\n")
+        trim_rows = [row for row in scorecard if _to_float(row.get("trim_ops_mean")) is not None and float(row.get("trim_ops_mean") or 0.0) > 0.0]
+        f.write(_markdown_table(trim_rows[:10], ["scenario", "policy", "runs", "trim_ops_mean", "trim_invalidated_pages_mean", "trim_misses_mean", "retrim_count_mean"]))
         f.write("\n## Top Anomaly Runs\n\n")
         f.write(_markdown_table(anomalies[:10], ["scenario", "policy", "seed", "waf", "wear_std", "gc_count", "anomaly_reasons"]))
         f.write("\n## Recommended Next Sweeps\n\n")
@@ -253,6 +256,7 @@ def write_insights_markdown(
         f.write("- Lower WAF means less internal write amplification in this simulator.\n")
         f.write("- Lower wear_std means erase counts are more evenly distributed.\n")
         f.write("- A Pareto-front run is not globally best; it is a trade-off point not dominated on WAF, wear_std, and gc_count.\n")
+        f.write("- TRIM misses and retrims indicate deallocate requests that did not invalidate a currently mapped LPN.\n")
         f.write("- Any AI narrative should cite these CSV outputs instead of inventing causal claims.\n")
 
 

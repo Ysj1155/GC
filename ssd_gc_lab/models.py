@@ -256,6 +256,14 @@ class SSD:
 
         # GC 이벤트 로그(분석용)
         self.gc_event_log: List[Dict[str, Any]] = []
+        # TRIM lifecycle counters and event log.
+        self.trim_ops = 0
+        self.trim_hits = 0
+        self.trim_misses = 0
+        self.retrim_count = 0
+        self.trim_invalidated_pages = 0
+        self.trim_event_log: List[Dict[str, Any]] = []
+        self._trim_seen_lpn: set[int] = set()
 
         # Mappings
         self.mapping: Dict[int, Tuple[int, int]] = {}            # LPN -> (b, p)
@@ -703,27 +711,56 @@ class SSD:
 
     def trim_lpn(self, lpn: int) -> None:
         """
-        TRIM(논리 삭제).
+        Deallocate one logical page.
 
-        효과
-        ----
-        - mapping에서 LPN을 제거하고,
-        - 해당 PPN의 페이지를 VALID -> INVALID로 바꿉니다.
-        - 쓰기(host/device write)는 증가하지 않습니다.
-        - trimmed_pages 카운터를 증가시켜 TRIM 이벤트를 추적합니다.
-
-        NOTE:
-        - 실제 SSD에서는 TRIM이 즉시 물리 invalid로 반영되기도 하고,
-          내부적으로 지연되기도 하지만, 여기서는 단순화를 위해 즉시 invalid 처리합니다.
+        TRIM is modeled as a host-side hint to invalidate an existing logical
+        mapping. It does not count as a host/device write and does not erase a
+        block immediately. GC may later reclaim the invalid page.
         """
         self._step += 1
+        self.trim_ops += 1
 
         pos = self.mapping.pop(lpn, None)
+        event: Dict[str, Any] = {
+            "step": self._step,
+            "lpn": lpn,
+            "was_mapped": 1 if pos is not None else 0,
+            "old_block": "",
+            "old_page": "",
+            "valid_before": "",
+            "invalid_before": "",
+            "free_before": "",
+            "valid_after": "",
+            "invalid_after": "",
+            "free_after": "",
+            "trim_hit": 0,
+            "trim_miss": 0,
+            "retrim": 0,
+            "invalidated_pages": 0,
+        }
+
         if pos is None:
+            self.trim_misses += 1
+            event["trim_miss"] = 1
+            if lpn in self._trim_seen_lpn:
+                self.retrim_count += 1
+                event["retrim"] = 1
+            self._trim_seen_lpn.add(lpn)
+            self.trim_event_log.append(event)
             return
 
+        self.trim_hits += 1
+        self._trim_seen_lpn.add(lpn)
         b, p = pos
         blk = self.blocks[b]
+        event.update({
+            "old_block": b,
+            "old_page": p,
+            "valid_before": blk.valid_count,
+            "invalid_before": blk.invalid_count,
+            "free_before": blk.free_count,
+            "trim_hit": 1,
+        })
 
         if blk.pages[p] == PageState.VALID:
             blk.pages[p] = PageState.INVALID
@@ -734,9 +771,16 @@ class SSD:
             blk.inv_ewma = (1.0 - self.ewma_lambda) * blk.inv_ewma + self.ewma_lambda * 1.0
 
             blk.trimmed_pages += 1
+            self.trim_invalidated_pages += 1
+            event["invalidated_pages"] = 1
 
         self.reverse_map.pop((b, p), None)
-
+        event.update({
+            "valid_after": blk.valid_count,
+            "invalid_after": blk.invalid_count,
+            "free_after": blk.free_count,
+        })
+        self.trim_event_log.append(event)
     # ============================================================
     # Host write (out-of-place)
     # ============================================================

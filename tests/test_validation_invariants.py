@@ -62,6 +62,17 @@ def test_trim_removes_mapping_without_extra_writes() -> None:
 
     ssd.trim_lpn(3)
     ssd.trim_lpn(3)
+    ssd.trim_lpn(99)
+
+    assert ssd.trim_ops == 3
+    assert ssd.trim_hits == 1
+    assert ssd.trim_misses == 2
+    assert ssd.retrim_count == 1
+    assert ssd.trim_invalidated_pages == 1
+    assert len(ssd.trim_event_log) == 3
+    assert ssd.trim_event_log[0]["trim_hit"] == 1
+    assert ssd.trim_event_log[1]["retrim"] == 1
+    assert ssd.trim_event_log[2]["trim_miss"] == 1
 
     assert 3 not in ssd.mapping
     assert old_ppn not in ssd.reverse_map

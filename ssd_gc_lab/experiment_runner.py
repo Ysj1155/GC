@@ -308,3 +308,15 @@ def write_gc_events_csv(path: str, sim: Simulator) -> None:
         writer.writeheader()
         for event in events:
             writer.writerow(event)
+
+def write_trim_events_csv(path: str, sim: Simulator) -> None:
+    """Write per-TRIM event log rows if the SSD produced them."""
+    events = getattr(sim.ssd, "trim_event_log", None)
+    if not events:
+        return
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=sorted(events[0].keys()))
+        writer.writeheader()
+        for event in events:
+            writer.writerow(event)

@@ -6,6 +6,7 @@ def test_get_scenarios_has_portfolio_stress_cases() -> None:
 
     assert "random_update_stress" in names
     assert "trim_burst" in names
+    assert "delete_after_bulk_load" in names
     assert "low_op_pressure" in names
     assert "endurance_short" in names
 

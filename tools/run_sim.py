@@ -74,6 +74,7 @@ from ssd_gc_lab.experiment_runner import (
     run_single_experiment,
     write_gc_events_csv,
     write_trace_csv,
+    write_trim_events_csv,
 )
 from ssd_gc_lab.metrics import append_summary_csv
 from ssd_gc_lab.manifest import build_run_manifest, write_manifest
@@ -159,6 +160,7 @@ def main():
     ap.add_argument("--out_csv", type=str, default=None, help="요약 CSV append 경로 (권장: summary.csv)")
     ap.add_argument("--trace_csv", type=str, default=None, help="옵션: trace CSV (시뮬레이터가 지원 시)")
     ap.add_argument("--gc_events_csv", type=str, default=None, help="per-GC 이벤트 로그 CSV (실행 후 저장)")
+    ap.add_argument("--trim_events_csv", type=str, default=None, help="per-TRIM event log CSV")
     ap.add_argument("--manifest_json", type=str, default=None, help="옵션: 재현성 manifest JSON 저장 경로")
     ap.add_argument("--note", type=str, default="", help="메모/주석")
     ap.add_argument(
@@ -176,6 +178,7 @@ def main():
     out_csv_path = resolve_output_path(args.out_csv, out_dir) if args.out_csv else None
     trace_csv_path = resolve_output_path(args.trace_csv, out_dir) if args.trace_csv else None
     gc_events_csv_path = resolve_output_path(args.gc_events_csv, out_dir) if args.gc_events_csv else None
+    trim_events_csv_path = resolve_output_path(args.trim_events_csv, out_dir) if args.trim_events_csv else None
     manifest_json_path = resolve_output_path(args.manifest_json, out_dir) if args.manifest_json else None
 
     sim, meta, row = run_single_experiment(args, enable_trace=bool(trace_csv_path))
@@ -198,11 +201,15 @@ def main():
     if gc_events_csv_path and getattr(sim.ssd, "gc_event_log", None):
         write_gc_events_csv(gc_events_csv_path, sim)
 
+    if trim_events_csv_path and getattr(sim.ssd, "trim_event_log", None):
+        write_trim_events_csv(trim_events_csv_path, sim)
+
     if manifest_json_path:
         artifacts = {
             "summary_csv": out_csv_path,
             "trace_csv": trace_csv_path,
             "gc_events_csv": gc_events_csv_path,
+            "trim_events_csv": trim_events_csv_path,
             "manifest_json": manifest_json_path,
         }
         manifest = build_run_manifest(
