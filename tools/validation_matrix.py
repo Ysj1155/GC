@@ -87,7 +87,30 @@ def get_scenarios(profile: str) -> List[MatrixScenario]:
                 "bg_gc_every": 192,
                 "warmup_fill": 0.65,
             },
-        ),        MatrixScenario(
+        ),
+        *[
+            MatrixScenario(
+                name=f"trim_locality_{locality}",
+                description=f"Controlled TRIM locality sensitivity run targeting {locality} LPNs.",
+                params={
+                    "ops": 16_000 * scale,
+                    "update_ratio": 0.72,
+                    "hot_ratio": 0.2,
+                    "hot_weight": 0.8,
+                    "enable_trim": True,
+                    "trim_ratio": 0.08,
+                    "trim_locality": locality,
+                    "trim_burst_length": 12,
+                    "trim_burst_interval": 192,
+                    "phase_pattern": "bulk_update_trim",
+                    "user_capacity_ratio": 0.9,
+                    "bg_gc_every": 192,
+                    "warmup_fill": 0.65,
+                },
+            )
+            for locality in ("hot", "cold", "mixed")
+        ],
+        MatrixScenario(
             name="low_op_pressure",
             description="Low over-provisioning pressure to force GC decisions.",
             params={
@@ -115,6 +138,20 @@ def get_scenarios(profile: str) -> List[MatrixScenario]:
         ),
     ]
 
+
+
+
+def filter_scenarios(scenarios: Iterable[MatrixScenario], selected_names: Iterable[str]) -> List[MatrixScenario]:
+    selected = list(selected_names)
+    if not selected:
+        return list(scenarios)
+
+    by_name = {scenario.name: scenario for scenario in scenarios}
+    missing = [name for name in selected if name not in by_name]
+    if missing:
+        known = ",".join(sorted(by_name))
+        raise ValueError(f"unknown scenario(s): {','.join(missing)}. known={known}")
+    return [by_name[name] for name in selected]
 
 def _append_option(cmd: List[str], key: str, value: Any) -> None:
     if value is None or value is False:
@@ -158,6 +195,18 @@ def build_run_command(
 
     for key, value in scenario.params.items():
         _append_option(cmd, key, value)
+
+    if scenario.params.get("enable_trim"):
+        cmd.extend([
+            "--gc_events_csv",
+            "gc_events.csv",
+            "--trim_events_csv",
+            "trim_events.csv",
+            "--trim_gc_lag_csv",
+            "trim_gc_lag.csv",
+            "--trim_windows_csv",
+            "trim_windows.csv",
+        ])
 
     return cmd
 
@@ -211,6 +260,7 @@ def main() -> int:
         help="Comma-separated seeds. Defaults to profile-specific seeds.",
     )
     parser.add_argument("--out_dir", default="results/final_clean")
+    parser.add_argument("--scenarios", default=None, help="Comma-separated scenario names to run. Defaults to all scenarios.")
     parser.add_argument("--qc", choices=["off", "warn", "strict"], default="strict")
     parser.add_argument("--dry_run", action="store_true")
 
@@ -219,6 +269,8 @@ def main() -> int:
     policies = _split_csv(args.policies)
     seeds = [int(x) for x in _split_csv(args.seeds)] if args.seeds else _profile_seeds(args.profile)
     scenarios = get_scenarios(args.profile)
+    selected_scenarios = _split_csv(args.scenarios) if args.scenarios else []
+    scenarios = filter_scenarios(scenarios, selected_scenarios)
     commands = iter_run_commands(
         scenarios=scenarios,
         policies=policies,
@@ -243,6 +295,7 @@ def main() -> int:
         "profile": args.profile,
         "policies": policies,
         "seeds": seeds,
+        "scenario_filter": selected_scenarios,
         "scenarios": [
             {"name": s.name, "description": s.description, "params": s.params}
             for s in scenarios

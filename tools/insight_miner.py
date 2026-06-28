@@ -15,9 +15,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from tools.validation_report import load_run_rows, write_csv
 
 
-LOWER_IS_BETTER = {"waf", "gc_count", "wear_std", "wear_max", "trim_misses", "retrim_count"}
-HIGHER_IS_BETTER = {"free_blocks", "trim_invalidated_pages"}
-KEY_METRICS = ["waf", "gc_count", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_misses", "retrim_count", "trim_invalidated_pages"]
+LOWER_IS_BETTER = {"waf", "gc_count", "wear_std", "wear_max", "trim_misses", "retrim_count", "trim_gc_lag_avg", "trim_gc_lag_p95", "trim_gc_lag_max", "trim_gc_lag_pending_count", "trim_window_avg_gc_count_delta", "trim_window_avg_waf_delta"}
+HIGHER_IS_BETTER = {"free_blocks", "trim_invalidated_pages", "trim_gc_reclaim_rate", "trim_gc_lag_reclaimed_count", "trim_window_avg_invalid_pages_delta", "trim_window_avg_free_blocks_delta"}
+KEY_METRICS = ["waf", "gc_count", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_misses", "retrim_count", "trim_invalidated_pages", "trim_gc_lag_eligible_count", "trim_gc_lag_reclaimed_count", "trim_gc_lag_pending_count", "trim_gc_reclaim_rate", "trim_gc_lag_avg", "trim_gc_lag_p95", "trim_gc_lag_max", "trim_window_count", "trim_window_avg_trim_ops", "trim_window_avg_invalid_pages_delta", "trim_window_avg_free_pages_delta", "trim_window_avg_free_blocks_delta", "trim_window_avg_gc_count_delta", "trim_window_avg_waf_delta", "trim_window_gc_window_count"]
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -248,6 +248,15 @@ def write_insights_markdown(
         f.write("\n## TRIM Activity\n\n")
         trim_rows = [row for row in scorecard if _to_float(row.get("trim_ops_mean")) is not None and float(row.get("trim_ops_mean") or 0.0) > 0.0]
         f.write(_markdown_table(trim_rows[:10], ["scenario", "policy", "runs", "trim_ops_mean", "trim_invalidated_pages_mean", "trim_misses_mean", "retrim_count_mean"]))
+        f.write("\n## TRIM-to-GC Lag\n\n")
+        lag_rows = [row for row in scorecard if _to_float(row.get("trim_gc_lag_eligible_count_mean")) is not None and float(row.get("trim_gc_lag_eligible_count_mean") or 0.0) > 0.0]
+        f.write(_markdown_table(lag_rows[:10], ["scenario", "policy", "runs", "trim_gc_reclaim_rate_mean", "trim_gc_lag_avg_mean", "trim_gc_lag_p95_mean", "trim_gc_lag_pending_count_mean"]))
+        f.write("\n## TRIM Window Movement\n\n")
+        window_rows = [row for row in scorecard if _to_float(row.get("trim_window_count_mean")) is not None and float(row.get("trim_window_count_mean") or 0.0) > 0.0]
+        f.write(_markdown_table(window_rows[:10], ["scenario", "policy", "runs", "trim_window_count_mean", "trim_window_avg_invalid_pages_delta_mean", "trim_window_avg_free_blocks_delta_mean", "trim_window_avg_gc_count_delta_mean", "trim_window_avg_waf_delta_mean"]))
+        f.write("\n## TRIM Locality Sensitivity\n\n")
+        locality_rows = [row for row in scorecard if str(row.get("scenario", "")).startswith("trim_locality_")]
+        f.write(_markdown_table(locality_rows[:15], ["scenario", "policy", "runs", "waf_mean", "gc_count_mean", "wear_std_mean", "trim_gc_lag_avg_mean", "trim_gc_reclaim_rate_mean", "trim_window_avg_invalid_pages_delta_mean", "trim_window_avg_gc_count_delta_mean"]))
         f.write("\n## Top Anomaly Runs\n\n")
         f.write(_markdown_table(anomalies[:10], ["scenario", "policy", "seed", "waf", "wear_std", "gc_count", "anomaly_reasons"]))
         f.write("\n## Recommended Next Sweeps\n\n")
@@ -257,6 +266,9 @@ def write_insights_markdown(
         f.write("- Lower wear_std means erase counts are more evenly distributed.\n")
         f.write("- A Pareto-front run is not globally best; it is a trade-off point not dominated on WAF, wear_std, and gc_count.\n")
         f.write("- TRIM misses and retrims indicate deallocate requests that did not invalidate a currently mapped LPN.\n")
+        f.write("- TRIM-to-GC lag is measured in simulator steps and only applies to TRIM hits that invalidated a physical page.\n")
+        f.write("- TRIM window movement compares before/after trace snapshots around grouped TRIM bursts.\n")
+        f.write("- TRIM locality rows compare hot, cold, and mixed delete targets under matched scenario parameters.\n")
         f.write("- Any AI narrative should cite these CSV outputs instead of inventing causal claims.\n")
 
 

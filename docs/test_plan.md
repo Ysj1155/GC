@@ -134,3 +134,33 @@ For interview review, the most important artifacts are:
 - `run_sim.py --qc strict` for runtime sanity checks
 - Clean result manifests for reproducible experiment sets
 - A short validation report summarizing workload, policy matrix, pass/fail status, and key metrics
+## TRIM-to-GC lag analysis
+
+- TRIM hit rows that invalidate a physical page are eligible for lag tracking.
+- The analyzer matches each eligible TRIM row to the next GC event whose victim block is the same physical block.
+- Reclaimed rows record `lag_steps`; pending rows remain visible with an empty lag.
+- Summary metrics include eligible, reclaimed, pending, reclaim rate, average lag, p95 lag, and max lag.
+## TRIM window analysis
+
+- Trace rows include free blocks, valid pages, invalid pages, host writes, device writes, GC count, and TRIM count.
+- TRIM events produced by Simulator include workload `op_step` for trace alignment.
+- Nearby TRIM events are grouped into windows using `trim_window_merge_gap`.
+- Each window compares before/after snapshots and records invalid page, free block, GC count, and WAF deltas.
+- Summary metrics include window count, average trim ops, average deltas, and windows with GC activity.
+## TRIM locality sensitivity
+
+- Matrix scenarios include hot, cold, and mixed TRIM locality variants with matched workload parameters.
+- Report rows preserve `trim_locality` for per-run inspection.
+- Locality summary groups runs by policy and TRIM target locality.
+- Sensitivity outputs compare WAF, GC count, wear spread, lag, reclaim rate, and window movement deltas.
+## Focused matrix filters
+
+- `validation_matrix.py --scenarios` can restrict a portfolio run to selected scenarios.
+- Scenario filters preserve the requested order and fail on unknown names.
+- TRIM evidence runs should use focused filters when collecting multi-policy, multi-seed artifacts.
+## TRIM evidence matrix
+
+- Focused evidence run covers TRIM burst, delete-after-bulk-load, and hot/cold/mixed locality scenarios.
+- The matrix crosses four policies and three seeds for 60 strict-QC runs.
+- Evidence outputs include validation report, validation summary, locality summary, insight packet, and LLM narrative packet.
+- The run is documented in `docs/trim_evidence_matrix.md`.

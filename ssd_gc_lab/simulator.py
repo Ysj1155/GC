@@ -213,8 +213,13 @@ class Simulator:
             self.trace = {
                 "step": [],
                 "free_pages": [],
+                "free_blocks": [],
+                "valid_pages": [],
+                "invalid_pages": [],
+                "host_writes": [],
                 "device_writes": [],
                 "gc_count": [],
+                "trim_ops": [],
                 "gc_event": [],   # per-op: "", bg_gen, bg_hot, bg_cold, low_free
                 "gc_events": [],  # per-GC: dict snapshot (선택)
             }
@@ -383,6 +388,9 @@ class Simulator:
                 if kind == "trim":
                     if hasattr(self.ssd, "trim_lpn"):
                         self.ssd.trim_lpn(lpn)
+                        events = getattr(self.ssd, "trim_event_log", None)
+                        if events:
+                            events[-1]["op_step"] = self.ops + 1
                 else:
                     if hasattr(self.ssd, "write_lpn"):
                         self.ssd.write_lpn(lpn)
@@ -435,10 +443,18 @@ class Simulator:
             # 4) per-op trace
             # -------------------------
             if self.enable_trace and self.trace:
+                blocks = list(getattr(self.ssd, "blocks", []) or [])
+                valid_pages = sum(int(getattr(block, "valid_count", 0)) for block in blocks)
+                invalid_pages = sum(int(getattr(block, "invalid_count", 0)) for block in blocks)
                 self.trace["step"].append(int(self.ops))
                 self.trace["free_pages"].append(int(getattr(self.ssd, "free_pages", 0)))
+                self.trace["free_blocks"].append(int(_free_block_count(blocks)))
+                self.trace["valid_pages"].append(int(valid_pages))
+                self.trace["invalid_pages"].append(int(invalid_pages))
+                self.trace["host_writes"].append(int(getattr(self.ssd, "host_write_pages", 0)))
                 self.trace["device_writes"].append(int(getattr(self.ssd, "device_write_pages", 0)))
                 self.trace["gc_count"].append(int(getattr(self.ssd, "gc_count", 0)))
+                self.trace["trim_ops"].append(int(getattr(self.ssd, "trim_ops", 0)))
                 self.trace["gc_event"].append(gc_cause)
 
     # ========================================================

@@ -1,4 +1,4 @@
-from tools.validation_matrix import build_run_command, get_scenarios, iter_run_commands
+from tools.validation_matrix import build_run_command, filter_scenarios, get_scenarios, iter_run_commands
 
 
 def test_get_scenarios_has_portfolio_stress_cases() -> None:
@@ -47,3 +47,9 @@ def test_iter_run_commands_crosses_scenarios_policies_and_seeds() -> None:
     joined = [" ".join(cmd) for cmd in commands]
     assert any("trim_burst" in cmd for cmd in joined)
     assert any("--gc_policy cota" in cmd for cmd in joined)
+
+def test_filter_scenarios_preserves_requested_order() -> None:
+    scenarios = get_scenarios("quick")
+    selected = filter_scenarios(scenarios, ["trim_locality_mixed", "trim_burst"])
+
+    assert [scenario.name for scenario in selected] == ["trim_locality_mixed", "trim_burst"]

@@ -20,6 +20,8 @@ from ssd_gc_lab.config import SimConfig
 from ssd_gc_lab.metrics import append_summary_csv, summary_row
 from ssd_gc_lab.policy_factory import inject_policy
 from ssd_gc_lab.simulator import Simulator
+from ssd_gc_lab.trim_lag import LAG_ROW_FIELDS, analyze_trim_to_gc_lag
+from ssd_gc_lab.trim_window import WINDOW_ROW_FIELDS, analyze_trim_windows
 from ssd_gc_lab.workload import make_workload
 
 
@@ -199,6 +201,9 @@ def run_single_experiment(args: Any, *, enable_trace: bool = False) -> tuple[Sim
     workload = build_workload(args, user_total_pages)
     apply_warmup(sim, cfg, user_total_pages, args.warmup_fill)
     sim.run(workload)
+    sim.trim_window_before_ops = int(getattr(args, "trim_window_before_ops", 32))
+    sim.trim_window_after_ops = int(getattr(args, "trim_window_after_ops", 32))
+    sim.trim_window_merge_gap = int(getattr(args, "trim_window_merge_gap", 1))
 
     meta = build_run_meta(args)
     row = summary_row(sim, meta)
@@ -284,16 +289,26 @@ def run_once(args: Any, out_dir: str, out_csv: Optional[str]) -> tuple[Dict[str,
 
 def write_trace_csv(path: str, sim: Simulator) -> None:
     """Write per-operation trace data when tracing was enabled."""
+    fields = [
+        "step",
+        "free_pages",
+        "free_blocks",
+        "valid_pages",
+        "invalid_pages",
+        "host_writes",
+        "device_writes",
+        "gc_count",
+        "trim_ops",
+        "gc_event",
+    ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["step", "free_pages", "device_writes", "gc_count", "gc_event"])
+        writer.writerow(fields)
         for i in range(len(sim.trace["step"])):
             writer.writerow([
-                sim.trace["step"][i],
-                sim.trace["free_pages"][i],
-                sim.trace["device_writes"][i],
-                sim.trace["gc_count"][i],
-                sim.trace["gc_event"][i],
+                (sim.trace.get(field, []) or [""] * len(sim.trace["step"]))[i]
+                if i < len(sim.trace.get(field, [])) else ""
+                for field in fields
             ])
 
 
@@ -320,3 +335,33 @@ def write_trim_events_csv(path: str, sim: Simulator) -> None:
         writer.writeheader()
         for event in events:
             writer.writerow(event)
+
+
+def write_trim_gc_lag_csv(path: str, sim: Simulator) -> None:
+    """Write per-TRIM reclaim lag rows matched against later GC erases."""
+    rows, _summary = analyze_trim_to_gc_lag(
+        getattr(sim.ssd, "trim_event_log", []) or [],
+        getattr(sim.ssd, "gc_event_log", []) or [],
+    )
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=LAG_ROW_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+def write_trim_windows_csv(path: str, sim: Simulator, *, before_ops: int = 32, after_ops: int = 32, merge_gap: int = 1) -> None:
+    """Write before/after TRIM window rows from trace and TRIM events."""
+    rows, _summary = analyze_trim_windows(
+        getattr(sim, "trace", {}) or {},
+        getattr(sim.ssd, "trim_event_log", []) or [],
+        before_ops=before_ops,
+        after_ops=after_ops,
+        merge_gap=merge_gap,
+    )
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=WINDOW_ROW_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)

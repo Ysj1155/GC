@@ -14,7 +14,7 @@ from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 
 
-KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_hits", "trim_misses", "retrim_count", "trim_invalidated_pages", "trimmed_pages"]
+KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_hits", "trim_misses", "retrim_count", "trim_invalidated_pages", "trimmed_pages", "trim_gc_lag_eligible_count", "trim_gc_lag_reclaimed_count", "trim_gc_lag_pending_count", "trim_gc_reclaim_rate", "trim_gc_lag_avg", "trim_gc_lag_p95", "trim_gc_lag_max", "trim_window_count", "trim_window_avg_trim_ops", "trim_window_avg_invalid_pages_delta", "trim_window_avg_free_pages_delta", "trim_window_avg_free_blocks_delta", "trim_window_avg_gc_count_delta", "trim_window_avg_waf_delta", "trim_window_gc_window_count"]
 
 
 def _read_json(path: str) -> Dict[str, Any]:
@@ -61,6 +61,8 @@ def load_run_rows(base_dir: str) -> List[Dict[str, Any]]:
             "ops": metrics.get("ops") or params.get("ops"),
             "update_ratio": metrics.get("update_ratio") or params.get("update_ratio"),
             "trim_ratio": metrics.get("trim_ratio") or params.get("trim_ratio"),
+            "trim_locality": params.get("trim_locality", ""),
+            "phase_pattern": params.get("phase_pattern", ""),
             "manifest": os.path.relpath(path, base_dir),
         }
         for key in KEY_METRICS:
@@ -92,6 +94,47 @@ def summarize_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         summary.append(item)
     return summary
 
+
+
+
+def _is_locality_row(row: Dict[str, Any]) -> bool:
+    locality = str(row.get("trim_locality") or "")
+    scenario = str(row.get("scenario") or "")
+    return locality in {"hot", "cold", "mixed"} and scenario.startswith("trim_locality_")
+
+
+def summarize_locality_rows(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    groups: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+    for row in rows:
+        if not _is_locality_row(row):
+            continue
+        key = (str(row.get("policy")), str(row.get("trim_locality")))
+        groups.setdefault(key, []).append(row)
+
+    metrics = [
+        "waf",
+        "gc_count",
+        "wear_std",
+        "trim_gc_lag_avg",
+        "trim_gc_reclaim_rate",
+        "trim_window_avg_invalid_pages_delta",
+        "trim_window_avg_free_blocks_delta",
+        "trim_window_avg_gc_count_delta",
+        "trim_window_avg_waf_delta",
+    ]
+    out: List[Dict[str, Any]] = []
+    for (policy, locality), group in sorted(groups.items()):
+        item: Dict[str, Any] = {
+            "policy": policy,
+            "trim_locality": locality,
+            "runs": len(group),
+        }
+        for metric in metrics:
+            vals = [_to_float(row.get(metric)) for row in group]
+            vals = [v for v in vals if v is not None]
+            item[f"{metric}_mean"] = round(mean(vals), 6) if vals else ""
+        out.append(item)
+    return out
 
 def write_csv(path: str, rows: List[Dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -125,6 +168,7 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
 
     scenarios = sorted({str(row.get("scenario")) for row in rows})
     policies = sorted({str(row.get("policy")) for row in rows})
+    locality_summary = summarize_locality_rows(rows)
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("# SSD GC Validation Report\n\n")
@@ -145,8 +189,23 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write(_markdown_table(summary, trim_cols))
         f.write("\n")
 
+        f.write("## TRIM-to-GC Lag Summary\n\n")
+        lag_cols = ["scenario", "policy", "runs", "trim_gc_lag_eligible_count_mean", "trim_gc_lag_reclaimed_count_mean", "trim_gc_lag_pending_count_mean", "trim_gc_reclaim_rate_mean", "trim_gc_lag_avg_mean", "trim_gc_lag_p95_mean"]
+        f.write(_markdown_table(summary, lag_cols))
+        f.write("\n")
+
+        f.write("## TRIM Window Summary\n\n")
+        window_cols = ["scenario", "policy", "runs", "trim_window_count_mean", "trim_window_avg_trim_ops_mean", "trim_window_avg_invalid_pages_delta_mean", "trim_window_avg_free_blocks_delta_mean", "trim_window_avg_gc_count_delta_mean", "trim_window_avg_waf_delta_mean"]
+        f.write(_markdown_table(summary, window_cols))
+        f.write("\n")
+
+        f.write("## TRIM Locality Sensitivity\n\n")
+        locality_cols = ["policy", "trim_locality", "runs", "waf_mean", "gc_count_mean", "wear_std_mean", "trim_gc_lag_avg_mean", "trim_gc_reclaim_rate_mean", "trim_window_avg_invalid_pages_delta_mean", "trim_window_avg_gc_count_delta_mean"]
+        f.write(_markdown_table(locality_summary, locality_cols))
+        f.write("\n")
+
         f.write("## Run Inventory\n\n")
-        inv_cols = ["scenario", "policy", "seed", "ops", "waf", "gc_count", "wear_std", "trim_ops", "trim_hits", "trim_misses", "manifest"]
+        inv_cols = ["scenario", "policy", "seed", "ops", "trim_locality", "waf", "gc_count", "wear_std", "trim_ops", "trim_hits", "trim_misses", "trim_gc_lag_avg", "trim_gc_lag_pending_count", "trim_window_count", "trim_window_avg_invalid_pages_delta", "trim_window_avg_gc_count_delta", "manifest"]
         f.write(_markdown_table(rows, inv_cols))
         f.write("\n")
 
@@ -156,6 +215,9 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write("- Each run manifest records command, parameters, git state, Python version, and final metrics.\n")
         f.write("- TRIM invalidates logical mappings but should not increment host/device write counters.\n")
         f.write("- TRIM-heavy rows should be interpreted together with GC and wear metrics.\n")
+        f.write("- TRIM-to-GC lag measures simulator steps from TRIM invalidation to later victim block erase.\n")
+        f.write("- TRIM window deltas compare trace snapshots before and after grouped TRIM bursts.\n")
+        f.write("- TRIM locality sensitivity compares hot, cold, and mixed delete targets under matched workload settings.\n")
         f.write("- These numbers are simulator-relative validation signals, not real SSD performance claims.\n")
 
 
@@ -163,18 +225,22 @@ def generate_report(base_dir: str, out_dir: Optional[str] = None) -> Dict[str, s
     out_dir = out_dir or base_dir
     rows = load_run_rows(base_dir)
     summary = summarize_rows(rows)
+    locality_summary = summarize_locality_rows(rows)
 
     run_csv = os.path.join(out_dir, "validation_runs.csv")
     summary_csv = os.path.join(out_dir, "validation_summary.csv")
     report_md = os.path.join(out_dir, "validation_report.md")
+    locality_csv = os.path.join(out_dir, "trim_locality_sensitivity.csv")
 
     write_csv(run_csv, rows)
     write_csv(summary_csv, summary)
+    write_csv(locality_csv, locality_summary)
     write_markdown_report(report_md, base_dir=base_dir, rows=rows, summary=summary)
 
     return {
         "run_csv": run_csv,
         "summary_csv": summary_csv,
+        "locality_csv": locality_csv,
         "report_md": report_md,
     }
 

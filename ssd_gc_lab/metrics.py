@@ -61,6 +61,9 @@ import csv
 import math
 import os
 
+from ssd_gc_lab.trim_lag import analyze_trim_to_gc_lag
+from ssd_gc_lab.trim_window import analyze_trim_windows
+
 
 # ------------------------------------------------------------
 # 내부 유틸
@@ -256,8 +259,19 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
     # Stability snapshot (선택)
     # -------------------------
     snap = make_stability_snapshot(sim)
+    _lag_rows, trim_gc_lag = analyze_trim_to_gc_lag(
+        getattr(ssd, "trim_event_log", []) or [],
+        getattr(ssd, "gc_event_log", []) or [],
+    )
+    _window_rows, trim_window = analyze_trim_windows(
+        getattr(sim, "trace", {}) or {},
+        getattr(ssd, "trim_event_log", []) or [],
+        before_ops=int(getattr(sim, "trim_window_before_ops", 32)),
+        after_ops=int(getattr(sim, "trim_window_after_ops", 32)),
+        merge_gap=int(getattr(sim, "trim_window_merge_gap", 1)),
+    )
 
-    return {
+    row = {
         "policy": policy_name,
         "host_writes": host_w,
         "device_writes": dev_w,
@@ -290,6 +304,9 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
         "transition_rate": round(snap.transition_rate, 6),
         "reheat_rate": round(snap.reheat_rate, 6),
     }
+    row.update(trim_gc_lag)
+    row.update(trim_window)
+    return row
 
 
 # ------------------------------------------------------------

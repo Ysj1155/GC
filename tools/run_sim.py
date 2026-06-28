@@ -75,6 +75,8 @@ from ssd_gc_lab.experiment_runner import (
     write_gc_events_csv,
     write_trace_csv,
     write_trim_events_csv,
+    write_trim_gc_lag_csv,
+    write_trim_windows_csv,
 )
 from ssd_gc_lab.metrics import append_summary_csv
 from ssd_gc_lab.manifest import build_run_manifest, write_manifest
@@ -161,6 +163,11 @@ def main():
     ap.add_argument("--trace_csv", type=str, default=None, help="옵션: trace CSV (시뮬레이터가 지원 시)")
     ap.add_argument("--gc_events_csv", type=str, default=None, help="per-GC 이벤트 로그 CSV (실행 후 저장)")
     ap.add_argument("--trim_events_csv", type=str, default=None, help="per-TRIM event log CSV")
+    ap.add_argument("--trim_gc_lag_csv", type=str, default=None, help="TRIM-to-GC lag CSV")
+    ap.add_argument("--trim_windows_csv", type=str, default=None, help="before/after TRIM window CSV")
+    ap.add_argument("--trim_window_before_ops", type=int, default=32, help="ops before each TRIM window snapshot")
+    ap.add_argument("--trim_window_after_ops", type=int, default=32, help="ops after each TRIM window snapshot")
+    ap.add_argument("--trim_window_merge_gap", type=int, default=1, help="max op gap for grouping adjacent TRIMs into one window")
     ap.add_argument("--manifest_json", type=str, default=None, help="옵션: 재현성 manifest JSON 저장 경로")
     ap.add_argument("--note", type=str, default="", help="메모/주석")
     ap.add_argument(
@@ -179,9 +186,11 @@ def main():
     trace_csv_path = resolve_output_path(args.trace_csv, out_dir) if args.trace_csv else None
     gc_events_csv_path = resolve_output_path(args.gc_events_csv, out_dir) if args.gc_events_csv else None
     trim_events_csv_path = resolve_output_path(args.trim_events_csv, out_dir) if args.trim_events_csv else None
+    trim_gc_lag_csv_path = resolve_output_path(args.trim_gc_lag_csv, out_dir) if args.trim_gc_lag_csv else None
+    trim_windows_csv_path = resolve_output_path(args.trim_windows_csv, out_dir) if args.trim_windows_csv else None
     manifest_json_path = resolve_output_path(args.manifest_json, out_dir) if args.manifest_json else None
 
-    sim, meta, row = run_single_experiment(args, enable_trace=bool(trace_csv_path))
+    sim, meta, row = run_single_experiment(args, enable_trace=bool(trace_csv_path or trim_windows_csv_path))
 
     if out_csv_path:
         # QC는 summary_row를 대상으로 수행(저장될 행을 검사)
@@ -204,12 +213,26 @@ def main():
     if trim_events_csv_path and getattr(sim.ssd, "trim_event_log", None):
         write_trim_events_csv(trim_events_csv_path, sim)
 
+    if trim_gc_lag_csv_path:
+        write_trim_gc_lag_csv(trim_gc_lag_csv_path, sim)
+
+    if trim_windows_csv_path:
+        write_trim_windows_csv(
+            trim_windows_csv_path,
+            sim,
+            before_ops=args.trim_window_before_ops,
+            after_ops=args.trim_window_after_ops,
+            merge_gap=args.trim_window_merge_gap,
+        )
+
     if manifest_json_path:
         artifacts = {
             "summary_csv": out_csv_path,
             "trace_csv": trace_csv_path,
             "gc_events_csv": gc_events_csv_path,
             "trim_events_csv": trim_events_csv_path,
+            "trim_gc_lag_csv": trim_gc_lag_csv_path,
+            "trim_windows_csv": trim_windows_csv_path,
             "manifest_json": manifest_json_path,
         }
         manifest = build_run_manifest(

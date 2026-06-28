@@ -83,6 +83,15 @@ def write_narrative(path: str, packet: Dict[str, List[Dict[str, Any]]]) -> None:
         f.write("\n### TRIM Activity\n\n")
         trim_rows = [row for row in scorecard if _to_float(row.get("trim_ops_mean")) is not None and float(row.get("trim_ops_mean") or 0.0) > 0.0]
         f.write(_table(trim_rows, ["scenario", "policy", "runs", "trim_ops_mean", "trim_invalidated_pages_mean", "trim_misses_mean", "retrim_count_mean"]))
+        f.write("\n### TRIM-to-GC Lag\n\n")
+        lag_rows = [row for row in scorecard if _to_float(row.get("trim_gc_lag_eligible_count_mean")) is not None and float(row.get("trim_gc_lag_eligible_count_mean") or 0.0) > 0.0]
+        f.write(_table(lag_rows, ["scenario", "policy", "runs", "trim_gc_reclaim_rate_mean", "trim_gc_lag_avg_mean", "trim_gc_lag_p95_mean", "trim_gc_lag_pending_count_mean"]))
+        f.write("\n### TRIM Window Movement\n\n")
+        window_rows = [row for row in scorecard if _to_float(row.get("trim_window_count_mean")) is not None and float(row.get("trim_window_count_mean") or 0.0) > 0.0]
+        f.write(_table(window_rows, ["scenario", "policy", "runs", "trim_window_count_mean", "trim_window_avg_invalid_pages_delta_mean", "trim_window_avg_free_blocks_delta_mean", "trim_window_avg_gc_count_delta_mean", "trim_window_avg_waf_delta_mean"]))
+        f.write("\n### TRIM Locality Sensitivity\n\n")
+        locality_rows = [row for row in scorecard if str(row.get("scenario", "")).startswith("trim_locality_")]
+        f.write(_table(locality_rows, ["scenario", "policy", "runs", "waf_mean", "gc_count_mean", "wear_std_mean", "trim_gc_lag_avg_mean", "trim_window_avg_gc_count_delta_mean"]))
         f.write("\n### Anomaly Candidates\n\n")
         f.write(_table(anomalies, ["scenario", "policy", "seed", "waf", "wear_std", "gc_count", "anomaly_reasons"]))
         f.write("\n### Pareto Candidates\n\n")
@@ -93,6 +102,9 @@ def write_narrative(path: str, packet: Dict[str, List[Dict[str, Any]]]) -> None:
         f.write("- These are simulator-relative signals, not production SSD performance claims.\n")
         f.write("- A narrative should distinguish observed results from hypotheses about firmware behavior.\n")
         f.write("- TRIM rows should distinguish mapping invalidation from later GC reclamation.\n")
+        f.write("- TRIM-to-GC lag rows connect mapping invalidation to later victim block erase, when observed.\n")
+        f.write("- TRIM window movement shows before/after trace deltas around grouped TRIM bursts.\n")
+        f.write("- TRIM locality rows compare hot, cold, and mixed delete targets under matched scenario parameters.\n")
         f.write("- Any LLM-generated explanation should cite the CSV rows used as evidence.\n")
 
 
