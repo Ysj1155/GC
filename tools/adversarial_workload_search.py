@@ -103,6 +103,7 @@ def _namespace(args: argparse.Namespace, policy: str, seed: int, workload: Dict[
         cold_victim_bias=1.0,
         trim_age_bonus=0.0,
         victim_prefetch_k=1,
+        age_stale_K=50.0,
         atcb_alpha=0.5,
         atcb_beta=0.3,
         atcb_gamma=0.1,
@@ -202,8 +203,8 @@ def _write_report(path: str, args: argparse.Namespace, rows: Sequence[Dict[str, 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Search for workload conditions that stress an SSD GC policy.")
-    parser.add_argument("--policy", default="cota", choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"])
-    parser.add_argument("--baseline_policy", default="greedy", choices=["", "greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"])
+    parser.add_argument("--policy", default="cota", choices=["greedy", "cb", "cost_benefit", "age_stale", "bsgc", "cota", "atcb", "re50315"])
+    parser.add_argument("--baseline_policy", default="greedy", choices=["", "greedy", "cb", "cost_benefit", "age_stale", "bsgc", "cota", "atcb", "re50315"])
     parser.add_argument("--objective", default="waf", choices=["waf", "wear_std", "gc_count", "waf_gap", "wear_gap"])
     parser.add_argument("--seeds", default="41")
     parser.add_argument("--ops", type=int, default=12000)

@@ -229,7 +229,7 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
     # -------------------------
     wear_list = [int(getattr(b, "erase_count", 0)) for b in blocks]
     wear_stat = _list_stat([float(x) for x in wear_list])
-
+    wear_spread = (max(wear_list) - min(wear_list)) if wear_list else 0
     # -------------------------
     # TRIM / valid / invalid aggregates
     # -------------------------
@@ -255,6 +255,20 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
     if nb and pages_per_block:
         total_pages = nb * pages_per_block
 
+
+    # -------------------------
+    # Mapping lifecycle / integrity snapshot
+    # -------------------------
+    if hasattr(ssd, "mapping_integrity_snapshot"):
+        mapping_snapshot = ssd.mapping_integrity_snapshot()
+    else:
+        mapping_snapshot = {
+            "mapping_entries": len(getattr(ssd, "mapping", {}) or {}),
+            "reverse_mapping_entries": len(getattr(ssd, "reverse_map", {}) or {}),
+            "dangling_mapping_entries": 0,
+            "dangling_reverse_entries": 0,
+            "valid_pages_without_reverse": 0,
+        }
     # -------------------------
     # Stability snapshot (선택)
     # -------------------------
@@ -299,6 +313,38 @@ def collect_run_metrics(sim: Any) -> Dict[str, Any]:
         "trim_invalidated_pages": int(_get(ssd, ["trim_invalidated_pages"], total_trimmed)),
         "valid_pages": total_valid,
         "invalid_pages": total_invalid,
+
+
+        # FTL wear-leveling 관측 신호
+        "wear_spread": wear_spread,
+        "wear_leveling_count": int(_get(ssd, ["wear_leveling_count"], 0)),
+        "wear_leveling_moved_pages": int(_get(ssd, ["wear_leveling_moved_pages"], 0)),
+        "wear_leveling_allocations": int(_get(ssd, ["wear_leveling_allocations"], 0)),
+        "wear_leveling_event_count": len(getattr(ssd, "wear_leveling_event_log", []) or []),
+        "wear_leveling_skipped_low_spread": int(_get(ssd, ["wear_leveling_skipped_low_spread"], 0)),
+        "wear_leveling_skipped_no_candidate": int(_get(ssd, ["wear_leveling_skipped_no_candidate"], 0)),
+        "wear_leveling_skipped_no_space": int(_get(ssd, ["wear_leveling_skipped_no_space"], 0)),
+        # FTL address translation / mapping lifecycle 관측 신호
+        "mapping_event_count": len(getattr(ssd, "mapping_event_log", []) or []),
+        "mapping_creates": int(_get(ssd, ["mapping_creates"], 0)),
+        "mapping_updates": int(_get(ssd, ["mapping_updates"], 0)),
+        "mapping_unmaps": int(_get(ssd, ["mapping_unmaps"], 0)),
+        "mapping_invalidations": int(_get(ssd, ["mapping_invalidations"], 0)),
+        "mapping_gc_remaps": int(_get(ssd, ["mapping_gc_remaps"], 0)),
+        "mapping_trim_unmaps": int(_get(ssd, ["mapping_trim_unmaps"], 0)),
+        "mapping_overwrite_invalidations": int(_get(ssd, ["mapping_overwrite_invalidations"], 0)),
+        "mapping_entries": int(mapping_snapshot.get("mapping_entries", 0)),
+        "reverse_mapping_entries": int(mapping_snapshot.get("reverse_mapping_entries", 0)),
+        "dangling_mapping_entries": int(mapping_snapshot.get("dangling_mapping_entries", 0)),
+        "dangling_reverse_entries": int(mapping_snapshot.get("dangling_reverse_entries", 0)),
+        "valid_pages_without_reverse": int(mapping_snapshot.get("valid_pages_without_reverse", 0)),
+        # FTL allocation/free-space manager 관측 신호
+        "allocator_event_count": len(getattr(ssd, "allocator_event_log", []) or []),
+        "allocator_host_allocations": int(_get(ssd, ["host_allocations"], 0)),
+        "allocator_migration_allocations": int(_get(ssd, ["migration_allocations"], 0)),
+        "allocator_active_block_switches": int(_get(ssd, ["active_block_switches"], 0)),
+        "allocator_reserve_denials": int(_get(ssd, ["reserve_block_denials"], 0)),
+        "allocator_all_invalid_reclaims": int(_get(ssd, ["all_invalid_reclaims"], 0)),
 
         # autotune/관찰용 보조 신호
         "transition_rate": round(snap.transition_rate, 6),

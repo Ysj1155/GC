@@ -227,7 +227,7 @@ def main() -> None:
         "--gc_policy",
         type=str,
         default="greedy",
-        choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"],
+        choices=["greedy", "cb", "cost_benefit", "age_stale", "bsgc", "cota", "atcb", "re50315"],
     )
 
     # COTA 확장
@@ -239,7 +239,8 @@ def main() -> None:
     ap.add_argument("--trim_age_bonus", type=float, default=0.0)
     ap.add_argument("--victim_prefetch_k", type=int, default=1)
 
-    # ATCB / RE50315
+    # age_stale / ATCB / RE50315
+    ap.add_argument("--age_stale_K", type=float, default=50.0)
     ap.add_argument("--atcb_alpha", type=float, default=0.5)
     ap.add_argument("--atcb_beta", type=float, default=0.3)
     ap.add_argument("--atcb_gamma", type=float, default=0.1)

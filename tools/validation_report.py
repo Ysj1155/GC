@@ -14,7 +14,7 @@ from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 
 
-KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "free_blocks", "trim_ops", "trim_hits", "trim_misses", "retrim_count", "trim_invalidated_pages", "trimmed_pages", "trim_gc_lag_eligible_count", "trim_gc_lag_reclaimed_count", "trim_gc_lag_pending_count", "trim_gc_reclaim_rate", "trim_gc_lag_avg", "trim_gc_lag_p95", "trim_gc_lag_max", "trim_window_count", "trim_window_avg_trim_ops", "trim_window_avg_invalid_pages_delta", "trim_window_avg_free_pages_delta", "trim_window_avg_free_blocks_delta", "trim_window_avg_gc_count_delta", "trim_window_avg_waf_delta", "trim_window_gc_window_count"]
+KEY_METRICS = ["waf", "gc_count", "wear_avg", "wear_std", "wear_max", "wear_spread", "free_blocks", "trim_ops", "trim_hits", "trim_misses", "retrim_count", "trim_invalidated_pages", "trimmed_pages", "wear_leveling_count", "wear_leveling_moved_pages", "wear_leveling_allocations", "wear_leveling_event_count", "wear_leveling_skipped_low_spread", "wear_leveling_skipped_no_candidate", "wear_leveling_skipped_no_space", "trim_gc_lag_eligible_count", "trim_gc_lag_reclaimed_count", "trim_gc_lag_pending_count", "trim_gc_reclaim_rate", "trim_gc_lag_avg", "trim_gc_lag_p95", "trim_gc_lag_max", "trim_window_count", "trim_window_avg_trim_ops", "trim_window_avg_invalid_pages_delta", "trim_window_avg_free_pages_delta", "trim_window_avg_free_blocks_delta", "trim_window_avg_gc_count_delta", "trim_window_avg_waf_delta", "trim_window_gc_window_count"]
 
 
 def _read_json(path: str) -> Dict[str, Any]:
@@ -184,6 +184,10 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write(_markdown_table(summary, cols))
         f.write("\n")
 
+        f.write("## Wear-Leveling Summary\n\n")
+        wl_cols = ["scenario", "policy", "runs", "waf_mean", "wear_std_mean", "wear_spread_mean", "wear_leveling_count_mean", "wear_leveling_moved_pages_mean", "wear_leveling_skipped_low_spread_mean"]
+        f.write(_markdown_table(summary, wl_cols))
+        f.write("\n")
         f.write("## TRIM Summary\n\n")
         trim_cols = ["scenario", "policy", "runs", "trim_ops_mean", "trim_hits_mean", "trim_misses_mean", "retrim_count_mean", "trim_invalidated_pages_mean"]
         f.write(_markdown_table(summary, trim_cols))
@@ -205,13 +209,14 @@ def write_markdown_report(path: str, *, base_dir: str, rows: List[Dict[str, Any]
         f.write("\n")
 
         f.write("## Run Inventory\n\n")
-        inv_cols = ["scenario", "policy", "seed", "ops", "trim_locality", "waf", "gc_count", "wear_std", "trim_ops", "trim_hits", "trim_misses", "trim_gc_lag_avg", "trim_gc_lag_pending_count", "trim_window_count", "trim_window_avg_invalid_pages_delta", "trim_window_avg_gc_count_delta", "manifest"]
+        inv_cols = ["scenario", "policy", "seed", "ops", "trim_locality", "waf", "gc_count", "wear_std", "wear_spread", "wear_leveling_count", "wear_leveling_moved_pages", "trim_ops", "trim_hits", "trim_misses", "trim_gc_lag_avg", "trim_gc_lag_pending_count", "trim_window_count", "trim_window_avg_invalid_pages_delta", "trim_window_avg_gc_count_delta", "manifest"]
         f.write(_markdown_table(rows, inv_cols))
         f.write("\n")
 
         f.write("## Interpretation Notes\n\n")
         f.write("- WAF should remain at or above 1.0 for host-write workloads.\n")
         f.write("- Lower `wear_std` indicates more even erase distribution in this simplified model.\n")
+        f.write("- `wear_leveling_count` and `wear_leveling_moved_pages` show the cost and activity of static wear-leveling.\n")
         f.write("- Each run manifest records command, parameters, git state, Python version, and final metrics.\n")
         f.write("- TRIM invalidates logical mappings but should not increment host/device write counters.\n")
         f.write("- TRIM-heavy rows should be interpreted together with GC and wear metrics.\n")

@@ -168,6 +168,10 @@ def build_run_meta(args: Any) -> Dict[str, Any]:
         "trim_ratio": getattr(args, "trim_ratio", 0.0),
         "warmup_fill": args.warmup_fill,
         "bg_gc_every": args.bg_gc_every,
+        "wear_leveling_enabled": 1 if getattr(args, "enable_wear_leveling", False) else 0,
+        "wear_leveling_every": getattr(args, "wear_leveling_every", 0),
+        "wear_leveling_threshold": getattr(args, "wear_leveling_threshold", 2),
+        "wear_leveling_min_valid_ratio": getattr(args, "wear_leveling_min_valid_ratio", 0.85),
         "burst_length": getattr(args, "burst_length", 0),
         "burst_ratio": getattr(args, "burst_ratio", 0.0),
         "phase_pattern": getattr(args, "phase_pattern", "steady"),
@@ -195,7 +199,15 @@ def run_single_experiment(args: Any, *, enable_trace: bool = False) -> tuple[Sim
     cfg = build_config(args)
     user_total_pages = infer_user_total_pages(cfg)
 
-    sim = Simulator(cfg, enable_trace=enable_trace, bg_gc_every=args.bg_gc_every)
+    sim = Simulator(
+        cfg,
+        enable_trace=enable_trace,
+        bg_gc_every=args.bg_gc_every,
+        enable_wear_leveling=getattr(args, "enable_wear_leveling", False),
+        wear_leveling_every=getattr(args, "wear_leveling_every", 0),
+        wear_leveling_threshold=getattr(args, "wear_leveling_threshold", 2),
+        wear_leveling_min_valid_ratio=getattr(args, "wear_leveling_min_valid_ratio", 0.85),
+    )
     inject_policy(args, sim)
 
     workload = build_workload(args, user_total_pages)
@@ -299,6 +311,12 @@ def write_trace_csv(path: str, sim: Simulator) -> None:
         "device_writes",
         "gc_count",
         "trim_ops",
+        "active_block",
+        "allocator_events",
+        "mapping_events",
+        "wear_leveling_count",
+        "wear_spread",
+        "wear_leveling_event",
         "gc_event",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:

@@ -59,6 +59,12 @@ def build_gc_policy(args: Any, sim: Any) -> Callable[[List[Any]], Optional[int]]
     if name == "bsgc":
         return gc_algos.bsgc_policy
 
+    if name in ("age_stale", "age"):
+        def age_stale_with_k(blocks):
+            return gc_algos.age_stale_policy(blocks, K=_arg(args, "age_stale_K", 50))
+
+        return age_stale_with_k
+
     if name == "cota":
         alpha = _arg(args, "cota_alpha")
         beta = _arg(args, "cota_beta")

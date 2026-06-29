@@ -66,6 +66,7 @@ def _base_namespace(args: argparse.Namespace, seed: int, params: Dict[str, float
         "cold_victim_bias": 1.0,
         "trim_age_bonus": 0.0,
         "victim_prefetch_k": 1,
+        "age_stale_K": 50.0,
         "atcb_alpha": 0.5,
         "atcb_beta": 0.3,
         "atcb_gamma": 0.1,
@@ -165,7 +166,7 @@ def run_tuner(args: argparse.Namespace) -> Dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a small policy parameter tuner over the SSD GC simulator.")
-    parser.add_argument("--policy", default="cota", choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"])
+    parser.add_argument("--policy", default="cota", choices=["greedy", "cb", "cost_benefit", "age_stale", "bsgc", "cota", "atcb", "re50315"])
     parser.add_argument("--param_grid", default="cota_alpha=0.45,0.55;cota_delta=0.05,0.15")
     parser.add_argument("--seeds", default="41,42")
     parser.add_argument("--ops", type=int, default=20000)
@@ -185,6 +186,7 @@ def main() -> int:
     parser.add_argument("--trim_locality", default="mixed", choices=["mixed", "hot", "cold"])
     parser.add_argument("--trim_burst_length", type=int, default=0)
     parser.add_argument("--trim_burst_interval", type=int, default=0)
+    parser.add_argument("--age_stale_K", type=float, default=50.0)
     parser.add_argument("--out_dir", default="results/policy_tuning")
     args = parser.parse_args()
 

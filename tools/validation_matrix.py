@@ -7,6 +7,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import subprocess
@@ -22,6 +23,17 @@ class MatrixScenario:
     description: str
     params: Dict[str, Any]
 
+POLICY_TIERS: Dict[str, List[str]] = {
+    "core_baseline": ["greedy", "cb"],
+    "balanced_baseline": ["age_stale", "bsgc", "atcb", "re50315"],
+    "custom": ["cota"],
+}
+
+DEFAULT_POLICY_SET: List[str] = [
+    policy
+    for tier in ("core_baseline", "balanced_baseline", "custom")
+    for policy in POLICY_TIERS[tier]
+]
 
 def _split_csv(value: str) -> List[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
@@ -121,6 +133,38 @@ def get_scenarios(profile: str) -> List[MatrixScenario]:
                 "user_capacity_ratio": 0.95,
                 "gc_free_block_threshold": 0.08,
                 "bg_gc_every": 128,
+            },
+        ),
+        MatrixScenario(
+            name="wear_leveling_off",
+            description="Wear-leveling comparison baseline with high update pressure.",
+            params={
+                "ops": 6_000 * scale,
+                "update_ratio": 0.9,
+                "hot_ratio": 0.2,
+                "hot_weight": 0.75,
+                "user_capacity_ratio": 0.88,
+                "gc_free_block_threshold": 0.1,
+                "bg_gc_every": 96,
+                "warmup_fill": 0.55,
+            },
+        ),
+        MatrixScenario(
+            name="wear_leveling_on",
+            description="Same workload with static wear-leveling enabled.",
+            params={
+                "ops": 6_000 * scale,
+                "update_ratio": 0.9,
+                "hot_ratio": 0.2,
+                "hot_weight": 0.75,
+                "user_capacity_ratio": 0.88,
+                "gc_free_block_threshold": 0.1,
+                "bg_gc_every": 96,
+                "warmup_fill": 0.55,
+                "enable_wear_leveling": True,
+                "wear_leveling_every": 96,
+                "wear_leveling_threshold": 1,
+                "wear_leveling_min_valid_ratio": 0.5,
             },
         ),
         MatrixScenario(
@@ -244,6 +288,105 @@ def write_matrix_manifest(path: str, payload: Dict[str, Any]) -> None:
         f.write("\n")
 
 
+
+
+def _option_value(cmd: List[str], option: str, default: Optional[str] = None) -> Optional[str]:
+    try:
+        idx = cmd.index(option)
+    except ValueError:
+        return default
+    if idx + 1 >= len(cmd):
+        return default
+    return cmd[idx + 1]
+
+
+def _manifest_path_for_command(cmd: List[str]) -> Optional[str]:
+    out_dir = _option_value(cmd, "--out_dir")
+    if not out_dir:
+        return None
+    manifest_name = _option_value(cmd, "--manifest_json", "manifest.json") or "manifest.json"
+    return os.path.join(out_dir, manifest_name)
+def _run_subprocess(index: int, cmd: List[str]) -> Dict[str, Any]:
+    print(f"[MATRIX] started {index + 1}: " + " ".join(cmd), flush=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    return {
+        "index": index,
+        "command": cmd,
+        "returncode": proc.returncode,
+        "dry_run": False,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+
+
+def _emit_completed_run(item: Dict[str, Any], total: int) -> None:
+    index = int(item["index"])
+    returncode = item["returncode"]
+    print(f"[MATRIX] completed {index + 1}/{total} returncode={returncode}", flush=True)
+    stdout = item.get("stdout") or ""
+    stderr = item.get("stderr") or ""
+    if stdout:
+        print(stdout, end="" if stdout.endswith("\n") else "\n", flush=True)
+    if stderr:
+        print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
+
+
+def run_matrix_commands(commands: List[List[str]], *, dry_run: bool = False, jobs: int = 1, skip_existing: bool = False) -> List[Dict[str, Any]]:
+    if jobs < 1:
+        raise ValueError("jobs must be >= 1")
+
+    skipped: List[Dict[str, Any]] = []
+    active_commands: List[tuple[int, List[str]]] = []
+    for index, cmd in enumerate(commands):
+        manifest_path = _manifest_path_for_command(cmd)
+        if skip_existing and manifest_path and os.path.exists(manifest_path):
+            print(f"[MATRIX] skip existing {index + 1}/{len(commands)}: {manifest_path}", flush=True)
+            skipped.append({"index": index, "command": cmd, "returncode": 0, "dry_run": dry_run, "skipped": True})
+        else:
+            active_commands.append((index, cmd))
+
+    if dry_run:
+        results: List[Dict[str, Any]] = list(skipped)
+        for index, cmd in active_commands:
+            print(" ".join(cmd), flush=True)
+            results.append({"index": index, "command": cmd, "returncode": None, "dry_run": True, "skipped": False})
+        return sorted(results, key=lambda item: int(item["index"]))
+
+    if not active_commands:
+        return sorted(skipped, key=lambda item: int(item["index"]))
+
+    if jobs == 1:
+        results = []
+        for index, cmd in active_commands:
+            print(" ".join(cmd), flush=True)
+            proc = subprocess.run(cmd)
+            results.append({"index": index, "command": cmd, "returncode": proc.returncode, "dry_run": False})
+            if proc.returncode != 0:
+                break
+        return sorted(skipped + results, key=lambda item: int(item["index"]))
+
+    print(f"[MATRIX] running {len(active_commands)} active runs with jobs={jobs} ({len(skipped)} skipped, {len(commands)} total)", flush=True)
+    results_by_index: Dict[int, Dict[str, Any]] = {}
+    failed = False
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
+        futures = {
+            executor.submit(_run_subprocess, index, cmd): index
+            for index, cmd in active_commands
+        }
+        for future in as_completed(futures):
+            if failed:
+                continue
+            item = future.result()
+            result = {k: v for k, v in item.items() if k not in {"stdout", "stderr"}}
+            results_by_index[int(item["index"])] = result
+            _emit_completed_run(item, len(commands))
+            if item["returncode"] != 0:
+                failed = True
+                for pending in futures:
+                    pending.cancel()
+
+    return sorted(skipped + [results_by_index[index] for index in sorted(results_by_index)], key=lambda item: int(item["index"]))
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run portfolio-oriented SSD GC validation matrix scenarios."
@@ -251,7 +394,7 @@ def main() -> int:
     parser.add_argument("--profile", choices=["quick", "full"], default="quick")
     parser.add_argument(
         "--policies",
-        default="greedy,cb,bsgc,cota",
+        default=",".join(DEFAULT_POLICY_SET),
         help="Comma-separated policies to run.",
     )
     parser.add_argument(
@@ -259,9 +402,11 @@ def main() -> int:
         default=None,
         help="Comma-separated seeds. Defaults to profile-specific seeds.",
     )
-    parser.add_argument("--out_dir", default="results/final_clean")
+    parser.add_argument("--out_dir", "--outdir", default="results/final_clean", help="Output directory for matrix results.")
     parser.add_argument("--scenarios", default=None, help="Comma-separated scenario names to run. Defaults to all scenarios.")
     parser.add_argument("--qc", choices=["off", "warn", "strict"], default="strict")
+    parser.add_argument("--jobs", type=int, default=1, help="Number of matrix runs to execute in parallel.")
+    parser.add_argument("--skip_existing", action="store_true", help="Skip runs whose manifest.json already exists.")
     parser.add_argument("--dry_run", action="store_true")
 
     args = parser.parse_args()
@@ -279,16 +424,7 @@ def main() -> int:
         qc=args.qc,
     )
 
-    results = []
-    for cmd in commands:
-        print(" ".join(cmd), flush=True)
-        if args.dry_run:
-            results.append({"command": cmd, "returncode": None, "dry_run": True})
-            continue
-        proc = subprocess.run(cmd)
-        results.append({"command": cmd, "returncode": proc.returncode, "dry_run": False})
-        if proc.returncode != 0:
-            break
+    results = run_matrix_commands(commands, dry_run=args.dry_run, jobs=args.jobs, skip_existing=args.skip_existing)
 
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -296,6 +432,8 @@ def main() -> int:
         "policies": policies,
         "seeds": seeds,
         "scenario_filter": selected_scenarios,
+        "jobs": args.jobs,
+        "skip_existing": args.skip_existing,
         "scenarios": [
             {"name": s.name, "description": s.description, "params": s.params}
             for s in scenarios

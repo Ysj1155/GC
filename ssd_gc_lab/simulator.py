@@ -220,6 +220,12 @@ class Simulator:
                 "device_writes": [],
                 "gc_count": [],
                 "trim_ops": [],
+                "active_block": [],
+                "allocator_events": [],
+                "mapping_events": [],
+                "wear_leveling_count": [],
+                "wear_spread": [],
+                "wear_leveling_event": [],
                 "gc_event": [],   # per-op: "", bg_gen, bg_hot, bg_cold, low_free
                 "gc_events": [],  # per-GC: dict snapshot (선택)
             }
@@ -234,6 +240,14 @@ class Simulator:
             every_gen=bg_every,
         )
 
+
+        # ----------------------------------------------------
+        # Wear-leveling background action 구성
+        # ----------------------------------------------------
+        self.enable_wear_leveling = bool(kwargs.pop("enable_wear_leveling", False))
+        self.wear_leveling_every = int(kwargs.pop("wear_leveling_every", 0) or 0)
+        self.wear_leveling_threshold = int(kwargs.pop("wear_leveling_threshold", 2) or 2)
+        self.wear_leveling_min_valid_ratio = float(kwargs.pop("wear_leveling_min_valid_ratio", 0.85))
         # ----------------------------------------------------
         # 정책: 기본 팩토리 + 외부 주입 우선 슬롯
         # ----------------------------------------------------
@@ -334,6 +348,24 @@ class Simulator:
 
         return False
 
+
+    def _do_wear_leveling(self, cause: str = "static_wear_leveling") -> bool:
+        """Run one optional FTL static wear-leveling action."""
+        if not hasattr(self.ssd, "perform_static_wear_leveling"):
+            return False
+        return bool(self.ssd.perform_static_wear_leveling(
+            threshold=self.wear_leveling_threshold,
+            min_valid_ratio=self.wear_leveling_min_valid_ratio,
+            cause=cause,
+        ))
+
+    def _wear_spread(self) -> int:
+        if hasattr(self.ssd, "_wear_spread"):
+            return int(self.ssd._wear_spread())
+        blocks = getattr(self.ssd, "blocks", []) or []
+        wears = [int(getattr(block, "erase_count", 0)) for block in blocks]
+        return (max(wears) - min(wears)) if wears else 0
+
     def _should_gc_by_free_ratio(self) -> bool:
         """
         cfg.gc_free_block_threshold(비율)가 설정된 경우,
@@ -378,6 +410,7 @@ class Simulator:
         t_hot = 0
         t_cold = 0
         t_gen = 0
+        t_wl = 0
 
         for op in workload:
             # -------------------------
@@ -406,11 +439,13 @@ class Simulator:
             t_hot += 1
             t_cold += 1
             t_gen += 1
+            t_wl += 1
 
             # -------------------------
             # 3) GC triggers
             # -------------------------
             did_gc = False
+            did_wl = False
             gc_cause = ""
 
             # (a) cadence 기반 BG-GC
@@ -439,6 +474,16 @@ class Simulator:
                     did_gc = True
                     gc_cause = "low_free"
 
+
+            # (c) static wear-leveling cadence
+            if (
+                self.enable_wear_leveling
+                and self.wear_leveling_every > 0
+                and t_wl >= self.wear_leveling_every
+                and not did_gc
+            ):
+                did_wl = self._do_wear_leveling(cause="static_wear_leveling")
+                t_wl = 0
             # -------------------------
             # 4) per-op trace
             # -------------------------
@@ -455,6 +500,13 @@ class Simulator:
                 self.trace["device_writes"].append(int(getattr(self.ssd, "device_write_pages", 0)))
                 self.trace["gc_count"].append(int(getattr(self.ssd, "gc_count", 0)))
                 self.trace["trim_ops"].append(int(getattr(self.ssd, "trim_ops", 0)))
+                active_block = getattr(self.ssd, "active_block_idx", None)
+                self.trace["active_block"].append(active_block if active_block is not None else "")
+                self.trace["allocator_events"].append(len(getattr(self.ssd, "allocator_event_log", []) or []))
+                self.trace["mapping_events"].append(len(getattr(self.ssd, "mapping_event_log", []) or []))
+                self.trace["wear_leveling_count"].append(int(getattr(self.ssd, "wear_leveling_count", 0)))
+                self.trace["wear_spread"].append(self._wear_spread())
+                self.trace["wear_leveling_event"].append(1 if did_wl else 0)
                 self.trace["gc_event"].append(gc_cause)
 
     # ========================================================

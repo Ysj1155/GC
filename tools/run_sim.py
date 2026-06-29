@@ -129,7 +129,7 @@ def main():
     # --------------------------------------------------------
     ap.add_argument(
         "--gc_policy", type=str, default="greedy",
-        choices=["greedy", "cb", "cost_benefit", "bsgc", "cota", "atcb", "re50315"],
+        choices=["greedy", "cb", "cost_benefit", "age_stale", "bsgc", "cota", "atcb", "re50315"],
         help="GC policy"
     )
     # COTA 파라미터
@@ -141,7 +141,8 @@ def main():
     ap.add_argument("--trim_age_bonus", type=float, default=0.0, help="TRIM 비율 기반 age 보너스")
     ap.add_argument("--victim_prefetch_k", type=int, default=1, help="victim 후보 top-K")
 
-    # ATCB / RE50315 파라미터
+    # age_stale / ATCB / RE50315 파라미터
+    ap.add_argument("--age_stale_K", type=float, default=50.0)
     ap.add_argument("--atcb_alpha", type=float, default=0.5)
     ap.add_argument("--atcb_beta",  type=float, default=0.3)
     ap.add_argument("--atcb_gamma", type=float, default=0.1)
@@ -155,6 +156,10 @@ def main():
         "--bg_gc_every", type=int, default=0,
         help="K>0이면 매 K ops마다 백그라운드 GC 시도(시뮬레이터가 지원할 때)"
     )
+    ap.add_argument("--enable_wear_leveling", action="store_true", help="static wear-leveling background action 활성화")
+    ap.add_argument("--wear_leveling_every", type=int, default=0, help="K>0이면 매 K ops마다 wear leveling 시도")
+    ap.add_argument("--wear_leveling_threshold", type=int, default=2, help="wear spread가 이 값 이상일 때 wear leveling 허용")
+    ap.add_argument("--wear_leveling_min_valid_ratio", type=float, default=0.85, help="static wear-leveling source 후보의 최소 valid ratio")
     ap.add_argument(
         "--out_dir", type=str, default="results/run",
         help="결과/로그를 저장할 디렉토리"
